@@ -48,7 +48,7 @@ test('schedule: seeded with today\'s times; Grok slots start off; Brasília cale
   assert.equal(r.status, 200);
   assert.equal(r.body.mode, 'log');
   const by = Object.fromEntries(r.body.slots.map((s) => [s.slot, s]));
-  assert.deepEqual(Object.keys(by).sort(), ['blog_afternoon', 'blog_midday', 'blog_morning', 'covers', 'curation', 'linkedin_afternoon', 'linkedin_morning', 'x_publish', 'x_radar']);
+  assert.deepEqual(Object.keys(by).sort(), ['blog_afternoon', 'blog_midday', 'blog_morning', 'covers', 'curation', 'linkedin_afternoon', 'linkedin_morning', 'x_publish', 'x_radar', 'x_takedowns']);
   assert.equal(by.blog_morning.time, '08:30');
   assert.equal(by.blog_midday.mode, 'burst');
   assert.equal(by.x_publish.mode, 'off');

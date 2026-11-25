@@ -66,7 +66,8 @@ INSERT INTO schedule_slots (slot, job, provider, round, time, mode, label) VALUE
   ('blog_afternoon',     'blog',        'claude', 'blog_afternoon',     '17:00', 'on',    'Blog afternoon'),
   ('linkedin_afternoon', 'linkedin',    'claude', 'linkedin_afternoon', '17:30', 'on',    'LinkedIn afternoon'),
   ('x_radar',            'x_radar',     'grok',   NULL,                 '12:00', 'off',   'X Radar'),
-  ('x_publish',          'x_publish',   'grok',   NULL,                 '18:00', 'off',   'X Publish');
+  ('x_publish',          'x_publish',   'grok',   NULL,                 '18:00', 'off',   'X Publish'),
+  ('x_takedowns',        'x_takedowns', 'grok',   NULL,                 '18:30', 'off',   'X Takedowns');
 
 CREATE TABLE push_outbox (
   id          INTEGER PRIMARY KEY,
