@@ -59,6 +59,7 @@ export function compose(rows) {
   const issues = rows.filter((r) => r.kind === 'issue').sort((a, b) => (a.severity === 'critical' ? -1 : 0) - (b.severity === 'critical' ? -1 : 0));
   for (const r of issues.slice(0, 3)) out.push({ ids: [r.id], severity: r.severity, tag: `dsb-${r.dedup_key}`, title: r.title, body: r.body, url: r.url });
   if (issues.length > 3) out.push({ ids: issues.slice(3).map((r) => r.id), severity: 'error', tag: 'dsb-issues-more', title: `${issues.length - 3} more problems`, body: 'Open Audit for the list', url: '/audit' });
+  for (const r of rows.filter((x) => x.kind === 'run_done')) out.push({ ids: [r.id], severity: 'info', tag: `dsb-${r.dedup_key}`, title: r.title, body: r.body, url: r.url });
   for (const r of rows.filter((x) => x.kind === 'link_answer')) out.push({ ids: [r.id], severity: 'info', tag: `dsb-${r.dedup_key}`, title: r.title, body: r.body, url: r.url });
   return out;
 }

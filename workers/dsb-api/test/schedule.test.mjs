@@ -325,3 +325,25 @@ test('live mode: a slot over 60 min late is missed, reported and pushed', async 
   assert.match(miss.summary, /Curation 07:00 did not start \(found 91 min late\)/);
   assert.ok((await outbox()).find((o) => o.kind === 'issue' && o.dedup_key === `issue:${miss.id}`));
 });
+
+test('successful-run pushes: on until PUSH_RUN_OK_UNTIL, one per run, done and skipped only', async () => {
+  const { env, call, outbox } = setup({ PUSH_RUN_OK_UNTIL: '2099-12-31' });
+  const run = async (job, status, notes) => {
+    const c = await call('POST', '/schedule/claim', { job });
+    const j = await call('POST', '/jobs', { job: `${job}-x`, run_key: c.body.run_key });
+    await call('PATCH', `/jobs/${j.body.job.id}`, { status, notes, items_written: 2 });
+    return c.body.run_key;
+  };
+  const k1 = await run('covers', 'ok', '2 covers made');
+  const done = (await outbox()).find((o) => o.dedup_key === `run:${k1}`);
+  assert.equal(done.title, 'Covers (Run now) done');
+  assert.equal(done.body, '2 covers made · 2 written');
+  await run('curation', 'error', 'search failed');
+  assert.equal((await outbox()).filter((o) => o.kind === 'run_done').length, 1, 'errors push through their issue, not here');
+  // after the last day: silent
+  const quiet = setup({ PUSH_RUN_OK_UNTIL: '2020-01-01' });
+  const c = await quiet.call('POST', '/schedule/claim', { job: 'covers' });
+  const j = await quiet.call('POST', '/jobs', { job: 'covers', run_key: c.body.run_key });
+  await quiet.call('PATCH', `/jobs/${j.body.job.id}`, { status: 'ok' });
+  assert.equal((await quiet.outbox()).filter((o) => o.kind === 'run_done').length, 0);
+});

@@ -30,7 +30,7 @@
   // STG has none (account limit) and runs the timer through POST /schedule/tick. SCHEDULE_MODE log = record only.
   // Secrets (from Pass at deploy): START_URL_<JOB>, START_KEY_<JOB>, ADMIN_PUSH_TOKEN.
   "triggers": { "crons": ["*/5 * * * *"] },
-  "vars": { "DSB_ENV": "prod", "SCHEDULE_MODE": "live" }, // live since the cutover, 25 Nov 2026 09:40 (timed tasks paused)
+  "vars": { "DSB_ENV": "prod", "SCHEDULE_MODE": "live", "PUSH_RUN_OK_UNTIL": "2026-11-27" }, // live since the cutover, 25 Nov 2026 09:37; successful runs push through Fri 27 Nov
   "services": [{ "binding": "ADMIN", "service": "dsb-admin" }],
   "d1_databases": [
     {

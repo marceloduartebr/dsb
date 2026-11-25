@@ -1,6 +1,7 @@
 import { ApiError, nowIso } from './http.js';
 import { readPlan, effective } from './plan.js';
 import { record } from './issues.js';
+import { enqueue } from './push.js';
 
 /**
  * Schedule run by dsb-api (X-30). The timer (cron every 5 min in production; on demand in STG) starts each slot's
@@ -343,12 +344,27 @@ export async function linkJob(db, runKeyValue, jobRunId) {
   await db.prepare(`UPDATE schedule_fires SET job_run_id = ?2 WHERE run_key = ?1 AND status = 'claimed'`).bind(String(runKeyValue), jobRunId).run();
 }
 
-/** PATCH /jobs/:id: closes the fire linked to the job (done | error | skipped). */
-export async function closeFireOfJob(db, job) {
+/**
+ * PATCH /jobs/:id: closes the fire linked to the job (done | error | skipped). While PUSH_RUN_OK_UNTIL (a Brasília
+ * day, YYYY-MM-DD) has not passed, a run that ends done or skipped also pushes (the first days after the cutover;
+ * failures push through their issue anyway).
+ */
+export async function closeFireOfJob(db, job, env = {}, now = Date.now()) {
   if (!job) return;
   const status = job.status === 'ok' ? 'done' : job.status;
-  await db
-    .prepare(`UPDATE schedule_fires SET status = ?2, finished_at = ?3, error = CASE WHEN ?2 = 'error' THEN ?4 ELSE error END WHERE job_run_id = ?1 AND status = 'claimed'`)
+  const fire = await db
+    .prepare(`UPDATE schedule_fires SET status = ?2, finished_at = ?3, error = CASE WHEN ?2 = 'error' THEN ?4 ELSE error END WHERE job_run_id = ?1 AND status = 'claimed' RETURNING *`)
     .bind(job.id, status, job.finished_at || nowIso(), job.notes || null)
-    .run();
+    .first();
+  const until = String(env.PUSH_RUN_OK_UNTIL || '');
+  if (!fire || !['done', 'skipped'].includes(status) || !/^\d{4}-\d{2}-\d{2}$/.test(until) || brt(now).date > until) return;
+  const label = (await db.prepare('SELECT label, time FROM schedule_slots WHERE slot = ?1').bind(fire.slot).first()) || { label: fire.slot, time: '' };
+  const counts = job.items_written != null ? ` · ${job.items_written} written` : '';
+  await enqueue(db, {
+    kind: 'run_done',
+    dedup_key: `run:${fire.run_key}`,
+    title: `${label.label}${fire.manual ? ' (Run now)' : ` ${label.time}`} ${status === 'done' ? 'done' : 'skipped'}`,
+    body: `${String(job.notes || '').slice(0, 160)}${counts}`.trim() || (status === 'done' ? 'Finished OK' : 'Nothing to do'),
+    url: '/flow#schedule'
+  }, now);
 }

@@ -208,7 +208,7 @@ async function dispatch({ route, db, url, body, id, session, env, parts }) {
     }
     case 'PATCH /jobs/:id': {
       const job = await finishJob(db, id, body);
-      await closeFireOfJob(db, job);
+      await closeFireOfJob(db, job, env);
       const s = await sweep(db).catch((e) => ({ error: String(e.message || e).slice(0, 200) }));
       return { body: { job, sweep: s } };
     }
