@@ -13,6 +13,9 @@
 // - POST /admin/alerta (ALERTA_TOKEN): free text only to Marcelo's fixed allowlist of 2 subscriptions
 //   (src/alerta.js). No fan-out, no KV writes or deletes, no change to the briefings' dedupe. (Retired after the
 //   dsb-api push cutover, X-31.)
+// - /admin/subscribers and /admin/broadcast* (BROADCAST_TOKEN, secret, used only by DSB Admin's Push tab): the
+//   subscriber list (no endpoints or keys) and a free-text broadcast to every subscriber, sent in batches of 8 on
+//   the Durable Object alarm. A broadcast never starts, and stops mid-way, while PUSH_SEND is not "on".
 //
 // OPERATIONAL SOURCE OF TRUTH
 // 1. Sending: SQLite key `envio` (admin /admin/envio). Deploying this file does NOT clear it.

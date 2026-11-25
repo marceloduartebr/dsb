@@ -2,6 +2,7 @@ import { autorizarAdmin } from './auth.js';
 import { logEvento } from './log.js';
 import { normalizarIsolado } from './logica.js';
 import { autorizarAlerta, enviarAlerta, validarAlerta } from './alerta.js';
+import { authorizeBroadcast, validateMessage } from './broadcast.js';
 
 const LIMITE = 262144;
 
@@ -52,6 +53,39 @@ export async function tratarPedido(request, env, agenda, deps = {}) {
     try {
       return json(await (deps.enviarAlerta || enviarAlerta)(env, v.payload));
     } catch {
+      return json({ ok: false, erro: 'interno' }, 500);
+    }
+  }
+
+  // Broadcast and subscriber list (DSB Admin, Push tab): own token BROADCAST_TOKEN, never ADMIN_TOKEN or ALERTA_TOKEN.
+  if (path === '/admin/subscribers' || path.startsWith('/admin/broadcast')) {
+    const authB = await authorizeBroadcast(request, env);
+    if (!authB.ok) {
+      logEvento('broadcast', { resultado: authB.status === 503 ? 'nao_configurado' : 'negado' });
+      return json({ ok: false, erro: authB.erro }, authB.status);
+    }
+    try {
+      if (request.method === 'GET' && path === '/admin/subscribers') {
+        return json({ ok: true, ...(await agenda.subscribers(new URL(request.url).searchParams.get('cursor') || '')) });
+      }
+      if (request.method === 'GET' && path === '/admin/broadcast') return json({ ok: true, ...(await agenda.broadcastStatus()) });
+      if (request.method !== 'POST') return json({ ok: false, erro: 'metodo' }, 405);
+      const lidoB = await lerCorpo(request);
+      if (lidoB.erro) return json({ ok: false, erro: lidoB.erro }, lidoB.status);
+      if (path === '/admin/broadcast/cancel') return json(await agenda.broadcastCancel(String(lidoB.corpo.by || '')));
+      const v = validateMessage(lidoB.corpo);
+      if (v.erro) return json({ ok: false, erro: v.erro }, 400);
+      if (path === '/admin/broadcast/test') {
+        // Only Marcelo's allowlisted subscriptions, through the alert path (no fan-out).
+        return json(await (deps.enviarAlerta || enviarAlerta)(env, { ...v.payload }));
+      }
+      if (path === '/admin/broadcast') {
+        const r = await agenda.broadcastStart({ payload: v.payload, sentBy: String(lidoB.corpo.by || ''), confirm: lidoB.corpo.confirm });
+        return json(r, r.ok ? 200 : 409);
+      }
+      return json({ ok: false, erro: 'nao_encontrado' }, 404);
+    } catch {
+      logEvento('broadcast', { resultado: 'erro' });
       return json({ ok: false, erro: 'interno' }, 500);
     }
   }

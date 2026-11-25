@@ -16,12 +16,23 @@ import { pushSendOn,
 import { vistaInscricao } from './kv-lista.js';
 import { baixarCatalogo, confirmarNoAr, enviarParaInscrito } from './rede.js';
 import { adaptadorDo } from './sql.js';
+import {
+  activeBroadcast,
+  broadcastPass,
+  cancelBroadcast,
+  createBroadcastSchema,
+  PASS_GAP_MS,
+  recentBroadcasts,
+  startBroadcast,
+  subscribersPage,
+} from './broadcast.js';
 
 export class AgendaPush extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       criarSchema(adaptadorDo(ctx.storage));
+      createBroadcastSchema(adaptadorDo(ctx.storage));
     });
   }
 
@@ -51,9 +62,11 @@ export class AgendaPush extends DurableObject {
     return r;
   }
 
+  /** Envio or fanout turned off: drop the briefing tick's next pass only; a broadcast keeps its own wake-up. */
   async apagarAlarme() {
     try {
-      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.delete('tickAt');
+      await this.schedule();
     } catch {
       /* sem alarme anterior */
     }
@@ -234,18 +247,90 @@ export class AgendaPush extends DurableObject {
     });
     if (resultado.tocarAlarme === false) return resultado;
     try {
-      if (resultado.continuar && resultado.esperarMs) {
-        await this.ctx.storage.setAlarm(Date.now() + resultado.esperarMs);
-      } else {
-        await this.ctx.storage.deleteAlarm();
-      }
+      // The alarm is shared with broadcasts: the tick keeps its own due time, schedule() sets the earliest.
+      if (resultado.continuar && resultado.esperarMs) await this.ctx.storage.put('tickAt', Date.now() + resultado.esperarMs);
+      else await this.ctx.storage.delete('tickAt');
+      await this.schedule();
     } catch {
       /* o SQLite continua sendo a fonte do que falta enviar */
     }
     return resultado;
   }
 
+  /** Sets the alarm to the earliest of the tick's next pass and the broadcast's next batch (or clears it). */
+  async schedule() {
+    const tickAt = await this.ctx.storage.get('tickAt');
+    const broadcastAt = activeBroadcast(this.db()) ? (await this.ctx.storage.get('broadcastAt')) || Date.now() : null;
+    const due = [tickAt, broadcastAt].filter((t) => typeof t === 'number');
+    if (due.length) await this.ctx.storage.setAlarm(Math.min(...due));
+    else await this.ctx.storage.deleteAlarm();
+  }
+
+  // ---------------------------------------------------------------- broadcast (DSB Admin, Push tab)
+
+  async subscribers(cursor) {
+    return subscribersPage(this.env.DSB_PUSH, cursor);
+  }
+
+  async broadcastStatus() {
+    return { sending: activeBroadcast(this.db()), recent: recentBroadcasts(this.db()), pushSend: pushSendOn(this.env) };
+  }
+
+  async broadcastStart({ payload, sentBy, confirm }) {
+    const total = (await subscribersPage(this.env.DSB_PUSH, '', 1)).total;
+    const r = startBroadcast(this.db(), this.env, { payload, sentBy, confirm, total });
+    logEvento('broadcast', { resultado: r.ok ? 'iniciado' : r.erro, total });
+    if (r.ok) {
+      await this.ctx.storage.put('broadcastAt', Date.now());
+      await this.schedule();
+    }
+    return r;
+  }
+
+  async broadcastCancel(by) {
+    const r = cancelBroadcast(this.db(), { by });
+    await this.schedule();
+    return r;
+  }
+
+  async broadcastStep() {
+    const env = this.env;
+    const r = await broadcastPass(this.db(), env, {
+      kv: env.DSB_PUSH,
+      send: (registro, payload) =>
+        enviarParaInscrito({
+          registro,
+          payload,
+          vapid: { publicKey: env.VAPID_PUBLIC_KEY, privateKey: env.VAPID_PRIVATE_KEY, subject: env.VAPID_SUBJECT || 'https://dsb.duarte.top/sobre' },
+          agora: new Date(),
+          fetchImpl: fetch,
+        }),
+    });
+    if (r.continue) await this.ctx.storage.put('broadcastAt', Date.now() + PASS_GAP_MS);
+    else await this.ctx.storage.delete('broadcastAt');
+    return r;
+  }
+
   async alarm() {
-    await this.tick({ origem: 'alarme' });
+    const now = Date.now();
+    const tickAt = await this.ctx.storage.get('tickAt');
+    const broadcastAt = await this.ctx.storage.get('broadcastAt');
+    let ran = false;
+    if (activeBroadcast(this.db()) && (broadcastAt == null || broadcastAt <= now)) {
+      ran = true;
+      try {
+        await this.broadcastStep();
+      } catch {
+        logEvento('broadcast', { resultado: 'erro' });
+        // Retry after the normal gap, not at once (the error is caught, so the platform's backoff never applies).
+        await this.ctx.storage.put('broadcastAt', Date.now() + PASS_GAP_MS);
+      }
+    }
+    // The tick runs when its time came, or when the alarm predates this scheme (no due times stored).
+    if ((typeof tickAt === 'number' && tickAt <= now) || (!ran && tickAt == null && broadcastAt == null)) {
+      await this.ctx.storage.delete('tickAt');
+      await this.tick({ origem: 'alarme' });
+    }
+    await this.schedule();
   }
 }
