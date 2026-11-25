@@ -27,7 +27,7 @@ Fluxo:
    - Se a variável do repositório `EVENTO_PUSH` **não** for exatamente `on`, o job encerra sem tick.
    - Com `EVENTO_PUSH=on`, espera o check **Workers Builds: dsb** com sucesso e faz `POST /admin/tick` com corpo `{"origem":"evento"}` e `Authorization: Bearer <ADMIN_TOKEN>`.
 4. `origem: evento` abre a **janela de 20 minutos** (igual ao cron) para retentar catálogo/`HEAD` enquanto o edge propaga.
-5. Travas `envio` + secret `PUSH_ENVIO=on` + `fanout=on` + cutoff continuam obrigatórias para fan-out.
+5. Travas `envio` + secret `PUSH_SEND=on` + `fanout=on` + cutoff continuam obrigatórias para fan-out.
 
 Segredos do repositório GitHub (só os **nomes**; valores nunca no git nem em issue):
 
@@ -70,9 +70,9 @@ A resposta `teste_isolado` com `enviados: 1` é aceite do serviço de push, não
 | Decisão | Onde vive | O deploy deste arquivo apaga? |
 |---|---|---|
 | Código e bindings | `workers/push-agenda/wrangler.jsonc` | Substitui o script e os bindings declarados |
-| Cron | `triggers.crons` em `workers/push-agenda/wrangler.jsonc`: `25 14,22 * * 1-5` | **Sim.** O deploy grava essa agenda. Remover a chave num deploy posterior apaga o cron. Não depende de `envio`, `PUSH_ENVIO` nem `fanout` |
+| Cron | `triggers.crons` em `workers/push-agenda/wrangler.jsonc`: `25 14,22 * * 1-5` | **Sim.** O deploy grava essa agenda. Remover a chave num deploy posterior apaga o cron. Não depende de `envio`, `PUSH_SEND` nem `fanout` |
 | Trava 1, `envio` | SQLite do Durable Object, via `POST /admin/envio` | Não. Padrão: chave ausente = desligado |
-| Trava 2, `PUSH_ENVIO` | Secret do Worker. Tem de ser exatamente `on` | Não, porque **não** está em `vars`. Não adicionar `vars.PUSH_ENVIO`: um `off` commitado passaria a pisar qualquer ativação em todo deploy |
+| Trava 2, `PUSH_SEND` | Secret do Worker. Tem de ser exatamente `on` | Não, porque **não** está em `vars`. Não adicionar `vars.PUSH_SEND`: um `off` commitado passaria a pisar qualquer ativação em todo deploy |
 | Fan-out, `fanout` | SQLite, via `POST /admin/fanout` | Não. Padrão: ausente = desligado. Sem isto, cron e `POST /admin/tick` sem `somente` não enviam a ninguém |
 | Cutoff e histórico | SQLite, via `POST /admin/importar` | Não, salvo se alguém trocar a tag da migration ou apagar a classe |
 | Par VAPID e `ADMIN_TOKEN` | Secrets. O mesmo par já publicado no site; a privada continua fora do git | Não |
@@ -92,7 +92,7 @@ A agenda ativa está em `workers/push-agenda/wrangler.jsonc`:
 
 É a mesma string de `CRON_DOCUMENTADO`: 14:25 e 22:25 UTC, dias úteis, 11:25 e 19:25 em Brasília (UTC−3, sem horário de verão desde 2019). O deploy deste arquivo liga o relógio. Não liga envio.
 
-`envio`, `PUSH_ENVIO` e `fanout` continuam independentes e, enquanto estiverem off, o disparo do cron não manda notificação. `/admin/medir` ainda devolve `cronAtivoNoArquivo: false`: esse campo é um marcador fixo do código, anterior a esta chave. A fonte do cron é o `wrangler.jsonc`, não essa resposta.
+`envio`, `PUSH_SEND` e `fanout` continuam independentes e, enquanto estiverem off, o disparo do cron não manda notificação. `/admin/medir` ainda devolve `cronAtivoNoArquivo: false`: esse campo é um marcador fixo do código, anterior a esta chave. A fonte do cron é o `wrangler.jsonc`, não essa resposta.
 
 Dentro de 20 minutos depois do disparo o Worker volta a cada 5 minutos se o catálogo ainda não tem o briefing do dia ou se o `HEAD` não é 200. É o atraso de build. Entrega já começada continua depois dessa janela, em lotes, até esgotar a fila ou o backoff. O adiantamento de −10 minutos do bot **não** foi reproduzido.
 
@@ -138,7 +138,7 @@ Não há exactly-once.
 - Repetir a chamada não duplica e não reabre quem já está `concluido`.
 - Se o slug já tem entregas, ou está `pendente`/`parcial`, a chamada devolve `conflitos` e **não** mexe nesse slug.
 - `cutoff` só anda para a frente. Valor anterior é recusado (`cutoff_retrocede`).
-- Sem cutoff, mesmo com `envio` e `PUSH_ENVIO` ligados, o tick responde `sem_cutoff` e não envia. Briefing com `publicadoEm` anterior ao cutoff vira `ignorado` (não foi push deste Worker; também não será).
+- Sem cutoff, mesmo com `envio` e `PUSH_SEND` ligados, o tick responde `sem_cutoff` e não envia. Briefing com `publicadoEm` anterior ao cutoff vira `ignorado` (não foi push deste Worker; também não será).
 
 O cutoff é exclusivo: `publicadoEm < cutoff` não sai. Igual ou posterior pode sair, se não estiver `concluido`.
 
@@ -178,7 +178,7 @@ Ordem. Não pular.
    - `wrangler secret put VAPID_PRIVATE_KEY --config workers/push-agenda/wrangler.jsonc`
    - `wrangler secret put VAPID_SUBJECT --config workers/push-agenda/wrangler.jsonc`  
      Usar o par que o site já tem. Não gerar outro: o service worker e as inscrições atuais quebram.
-5. Medir ainda desligado (sem `PUSH_ENVIO`, sem `envio`, sem `fanout`):
+5. Medir ainda desligado (sem `PUSH_SEND`, sem `envio`, sem `fanout`):
 
    ```bash
    curl -sS -X POST "$URL/admin/medir" \
@@ -191,7 +191,7 @@ Ordem. Não pular.
 6. Pausar o bot (o cron da máquina). Esperar não haver `apos-publicar` / `enviar` em execução.
 7. Importar o `~/.config/dsb/push-enviados.json` **na íntegra**, com `cutoff` no instante do corte (ISO UTC). Guardar a resposta (`conflitos` tem de ser `[]`). A importação não envia.
 8. `GET /admin/status`. `envio` e `fanout` continuam `off`. O que o bot já marcou aparece `concluido`.
-9. Teste isolado, com autorização separada. `PUSH_ENVIO=on` e `POST /admin/envio` `{ "ligado": true }`. **Não** ligar `fanout`. Uma inscrição nova, chave `sub:` conhecida, num slug do dia que ainda não está `concluido` e cujo `pubDate` já passou:
+9. Teste isolado, com autorização separada. `PUSH_SEND=on` e `POST /admin/envio` `{ "ligado": true }`. **Não** ligar `fanout`. Uma inscrição nova, chave `sub:` conhecida, num slug do dia que ainda não está `concluido` e cujo `pubDate` já passou:
 
    ```bash
    curl -sS -X POST "$URL/admin/tick" \
@@ -201,13 +201,13 @@ Ordem. Não pular.
    ```
 
    A resposta `teste_isolado` com `enviados: 1` é aceite do serviço de push para essa chave, não prova de notificação no aparelho. O artigo permanece `pendente`. Quem não está em `somente` não é lido.
-10. A agenda já está em `triggers.crons`. O merge e o deploy desse arquivo só depois de pausar `apos-publicar` / `enviar` e confirmar que não há execução em curso. O deploy liga o cron e não liga `envio`, `PUSH_ENVIO` nem `fanout`. Não apagar a linha `esgotado` do teste antigo nem mudar slug global para “limpar” o histórico.
+10. A agenda já está em `triggers.crons`. O merge e o deploy desse arquivo só depois de pausar `apos-publicar` / `enviar` e confirmar que não há execução em curso. O deploy liga o cron e não liga `envio`, `PUSH_SEND` nem `fanout`. Não apagar a linha `esgotado` do teste antigo nem mudar slug global para “limpar” o histórico.
 11. Fan-out, quando for autorizado à parte: `POST /admin/fanout` `{ "ligado": true }`, com as outras travas já ligadas. Não é este commit.
 12. Acompanhar um ciclo de dia útil (11:25 e 19:25). `parcial` ou `esgotado` no status é falha de entrega, não “já foi”.
 
 Estado já gravado do artigo `2026-11-07-workos-incidente`, sem limpeza nesta etapa: cutoff `2026-11-07T23:52:59Z` e quatro slugs importados; uma entrega `enviado` na inscrição nova, cujo recebimento foi confirmado; uma linha `esgotado` do teste antigo, cuja inscrição saiu do KV; as outras três inscrições de 5 de novembro não foram tentadas. Esse registro fica como histórico parcial. Não reabrir a linha esgotada por este runbook.
 
-`PUSH_ENVIO` sozinho não envia. `envio` sozinho não envia. Cron sozinho não envia. `fanout` sozinho não envia. Tick sem `somente` e sem `fanout` responde `fanout_desligado` e não grava artigo.
+`PUSH_SEND` sozinho não envia. `envio` sozinho não envia. Cron sozinho não envia. `fanout` sozinho não envia. Tick sem `somente` e sem `fanout` responde `fanout_desligado` e não grava artigo.
 
 ## Rollback sem duplicar
 
@@ -217,7 +217,7 @@ Estado já gravado do artigo `2026-11-07-workos-incidente`, sem limpeza nesta et
 4. Para cada slug com alguma entrega `enviado`: colocar o slug em `~/.config/dsb/push-enviados.json` **antes** de religar o bot. O bot deduplica por slug, não por pessoa. Religar sem isso reenvia para quem já recebeu.
 5. Slug `parcial`: também entra no arquivo do bot se houve ao menos um `enviado`. Quem ficou `pendente` ou `esgotado` **não** recebe o restante pelo bot. É a escolha que evita duplicata. A alternativa (não recomendar) é deixar o slug fora e aceitar duplicata para todo mundo.
 6. Slug sem nenhum `enviado` (só `aguardando`, `ignorado`, ou falha antes do primeiro 201): não colocar no arquivo do bot, para o bot poder enviar.
-7. Secret `PUSH_ENVIO`: `wrangler secret delete` ou um valor que não seja `on`. Não é obrigatório se `ligado` já é `false`, mas fecha a segunda trava.
+7. Secret `PUSH_SEND`: `wrangler secret delete` ou um valor que não seja `on`. Não é obrigatório se `ligado` já é `false`, mas fecha a segunda trava.
 8. Religar o bot só depois dos passos 4–6.
 
 O Durable Object guarda o dedupe. Não apagar a classe nem mudar a tag `v1-agenda-push` num rollback: objeto novo perderia a memória de quem já recebeu.

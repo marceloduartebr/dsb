@@ -171,6 +171,7 @@ test('config do agendador versiona o cron e não reutiliza recurso do site além
   assert.equal(agenda.name, 'dsb-push');
   assert.deepEqual(agenda.triggers, { crons: [CRON_DOCUMENTADO] });
   assert.equal(CRON_DOCUMENTADO, '25 14,22 * * 1-5');
+  assert.equal(JSON.stringify(agenda).includes('PUSH_SEND'), false);
   assert.equal(JSON.stringify(agenda).includes('PUSH_ENVIO'), false);
   assert.equal(agenda.observability.traces.enabled, false);
   assert.equal(agenda.kv_namespaces.length, 1);
@@ -181,4 +182,13 @@ test('config do agendador versiona o cron e não reutiliza recurso do site além
   assert.equal(agenda.durable_objects.bindings[0].class_name, 'AgendaPush');
   assert.deepEqual(agenda.migrations[0].new_sqlite_classes, ['AgendaPush']);
   assert.equal(JSON.stringify(agenda).includes('BEGIN'), false);
+});
+
+test('send lock: PUSH_SEND decides; the old PUSH_ENVIO counts only while PUSH_SEND is not set', async () => {
+  const { pushSendOn } = await import('../src/logica.js');
+  assert.equal(pushSendOn({}), false);
+  assert.equal(pushSendOn({ PUSH_ENVIO: 'on' }), true);
+  assert.equal(pushSendOn({ PUSH_SEND: 'on' }), true);
+  assert.equal(pushSendOn({ PUSH_SEND: 'off', PUSH_ENVIO: 'on' }), false);
+  assert.equal(pushSendOn({ PUSH_SEND: 'ON' }), false);
 });

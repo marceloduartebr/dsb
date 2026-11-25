@@ -1,34 +1,35 @@
-// Worker de agendamento Web Push do DSB. Independente do Worker do site
-// (wrangler.jsonc na raiz, nome "dsb").
+// DSB Web Push scheduling Worker. Separate from the site Worker (wrangler.jsonc at the root, name "dsb").
 //
-// ESTE ARQUIVO ATIVA SÓ A AGENDA. NÃO ATIVA ENVIO.
-// - triggers.crons é a fonte versionada do cron: "25 14,22 * * 1-5"
-//   (dias úteis, 11:25 e 19:25 em Brasília, UTC−3). Igual a CRON_DOCUMENTADO.
-// - wrangler deploy substitui os crons da conta por esta chave. Tirá-la num deploy
-//   posterior apaga a agenda. Não criar o cron só no painel.
-// - Não há var PUSH_ENVIO. O tick do cron não envia se o secret não for exatamente "on"
-//   ou se a chave SQLite "envio" não for "on" (padrão: ausente = off).
-// - Fan-out ao KV inteiro exige ainda a chave SQLite "fanout" = "on" (padrão: ausente = off).
-//   Com fanout off, o cron responde fanout_desligado e não grava destinatários.
-// - O par VAPID, o ADMIN_TOKEN e o ALERTA_TOKEN entram como secrets. Não há valor neste arquivo.
-// - POST /admin/alerta (ALERTA_TOKEN): texto livre só para a allowlist fixa de 2 inscrições do Marcelo
-//   (src/alerta.js). Não faz fan-out, não grava nem apaga no KV, não mexe no dedupe dos briefings.
+// THIS FILE TURNS ON THE SCHEDULE ONLY. IT DOES NOT TURN ON SENDING.
+// - triggers.crons is the versioned source of the cron: "25 14,22 * * 1-5"
+//   (weekdays, 11:25 and 19:25 Brasília, UTC−3). Same as CRON_DOCUMENTADO.
+// - wrangler deploy replaces the account's crons for this Worker with this key. Removing it in a later deploy
+//   deletes the schedule. Do not create the cron only in the dashboard.
+// - There is no PUSH_SEND var. The cron tick does not send unless the secret is exactly "on"
+//   and the SQLite key "envio" is "on" (default: missing = off).
+// - Fan-out to the whole KV also needs the SQLite key "fanout" = "on" (default: missing = off).
+//   With fanout off, the cron answers fanout_desligado and records no recipients.
+// - The VAPID pair, ADMIN_TOKEN and ALERTA_TOKEN are secrets. No value lives in this file.
+// - POST /admin/alerta (ALERTA_TOKEN): free text only to Marcelo's fixed allowlist of 2 subscriptions
+//   (src/alerta.js). No fan-out, no KV writes or deletes, no change to the briefings' dedupe. (Retired after the
+//   dsb-api push cutover, X-31.)
 //
-// FONTE DE VERDADE OPERACIONAL
-// 1. Envio: chave SQLite `envio` (admin /admin/envio). Deploy deste arquivo NÃO apaga essa chave.
-//    O secret PUSH_ENVIO é a segunda trava e também não é removido por deploy (não está em vars).
-//    Fan-out: chave SQLite `fanout` (admin /admin/fanout). Também sobrevive ao deploy.
-//    As três são independentes do cron.
-// 2. Cron: a chave triggers abaixo. Não remover sem querer desligar a agenda.
-// 3. Não recolocar PUSH_ENVIO em "vars". Um "off" commitado passaria a ser aplicado em todo
-//    deploy e apagaria uma ativação feita por secret/var fora do arquivo, sem aviso no diff
-//    se alguém só "limpar" a linha. Ausência + padrão off no código é o comportamento seguro.
-// 4. A migration v1 cria a classe SQLite uma vez. Não trocar a tag nem apagar a classe:
-//    isso criaria objeto novo e perderia dedupe (risco de reenvio).
+// OPERATIONAL SOURCE OF TRUTH
+// 1. Sending: SQLite key `envio` (admin /admin/envio). Deploying this file does NOT clear it.
+//    The PUSH_SEND secret is the second lock and is not removed by a deploy either (it is not in vars).
+//    Until PUSH_SEND is set, the code reads the old secret PUSH_ENVIO (same meaning), so renaming changes nothing.
+//    Fan-out: SQLite key `fanout` (admin /admin/fanout). Also survives deploys.
+//    All three are independent of the cron.
+// 2. Cron: the triggers key below. Do not remove it unless the schedule should stop.
+// 3. Never put PUSH_SEND in "vars". A committed "off" would apply on every deploy and would erase a value set
+//    as a secret outside the file, with nothing in the diff if someone just "cleans up" the line.
+//    Missing + off by default in the code is the safe behaviour.
+// 4. Migration v1 creates the SQLite class once. Do not change its tag or delete the class (or the DO instance
+//    name "agenda" in src/index.js): that would create a new object and lose the dedupe (risk of resending).
 //
-// KV DSB_PUSH é o namespace JÁ existente das inscrições. Não criar outro.
-// Não apontar para recurso do Boa Nova do Dia. Chaves e namespaces dos dois produtos ficam separados.
-// Traces ficam desligados: o span de fetch grava url.full (endpoint de push) e o de KV grava a chave.
+// KV DSB_PUSH is the existing namespace of the subscriptions. Do not create another.
+// Do not point at Boa Nova do Dia resources. The two products keep separate keys and namespaces.
+// Traces stay off: the fetch span records url.full (push endpoint) and the KV span records the key.
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "dsb-push",
@@ -57,7 +58,7 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "AGENDA",
+        "name": "SCHEDULE",
         "class_name": "AgendaPush"
       }
     ]

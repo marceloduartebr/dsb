@@ -6,14 +6,14 @@ export { AgendaPush };
 
 export default {
   async fetch(request, env) {
-    return tratarPedido(request, env, env.AGENDA.getByName('agenda'));
+    return tratarPedido(request, env, env.SCHEDULE.getByName('agenda'));
   },
 
   async scheduled(controller, env, ctx) {
     const programado = new Date(controller.scheduledTime).toISOString();
     logEvento('cron', { programado });
     ctx.waitUntil(
-      env.AGENDA.getByName('agenda').tick({ origem: 'cron', programado }),
+      env.SCHEDULE.getByName('agenda').tick({ origem: 'cron', programado }),
     );
   },
 };

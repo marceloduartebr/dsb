@@ -844,3 +844,12 @@ export async function executarTick(db, opts) {
     soltarLock(db, dono);
   }
 }
+
+/**
+ * Second send lock (secret, never a var): PUSH_SEND = "on". While PUSH_SEND is not set, the old name PUSH_ENVIO is
+ * read instead, so the rename changes nothing until Marcelo copies the value and deletes the old secret.
+ */
+export function pushSendOn(env) {
+  const v = env.PUSH_SEND !== undefined ? env.PUSH_SEND : env.PUSH_ENVIO;
+  return v === 'on';
+}

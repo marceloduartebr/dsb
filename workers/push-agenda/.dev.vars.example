@@ -5,4 +5,4 @@
 # VAPID_PUBLIC_KEY=     # mesmo par já usado pelo site; não gerar outro
 # VAPID_PRIVATE_KEY=
 # VAPID_SUBJECT=https://dsb.duarte.top/sobre
-# PUSH_ENVIO=           # deixar vazio. Só o valor exato on destrava o envio, junto com a chave no DO.
+# PUSH_SEND=            # leave empty. Only the exact value on unlocks sending, together with the key in the DO.

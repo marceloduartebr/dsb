@@ -3,7 +3,7 @@ import { normalizarItens, selecionarDoDia } from '../../../src/lib/push-catalogo
 import { CRON_DOCUMENTADO, LOTE_ENVIO, LOTE_KV, ORCAMENTO_SUBREQUESTS, SITE, TETO_SIMULACAO } from './constantes.js';
 import { medirCifra } from './crypto-push.js';
 import { logEvento } from './log.js';
-import {
+import { pushSendOn,
   criarSchema,
   definirEnvio as gravarEnvio,
   definirFanout as gravarFanout,
@@ -30,11 +30,11 @@ export class AgendaPush extends DurableObject {
   }
 
   urlCatalogo() {
-    return this.env.CATALOGO_URL || `${SITE}/push/catalogo.json`;
+    return this.env.CATALOG_URL || `${SITE}/push/catalogo.json`;
   }
 
   async status() {
-    return lerStatus(this.db(), { pushEnvio: this.env.PUSH_ENVIO === 'on' });
+    return lerStatus(this.db(), { pushEnvio: pushSendOn(this.env) });
   }
 
   async definirEnvio(ligado) {
@@ -101,7 +101,7 @@ export class AgendaPush extends DurableObject {
       agora: new Date(),
       cutoff: lerMeta(db, 'cutoff'),
       envio: lerMeta(db, 'envio') === 'on',
-      pushEnvio: this.env.PUSH_ENVIO === 'on',
+      pushEnvio: pushSendOn(this.env),
       fanout: lerMeta(db, 'fanout') === 'on',
     });
     logEvento('simular', {
@@ -144,7 +144,7 @@ export class AgendaPush extends DurableObject {
       cronAtivoNoArquivo: false,
       envio: lerMeta(db, 'envio') === 'on' ? 'on' : 'off',
       fanout: lerMeta(db, 'fanout') === 'on' ? 'on' : 'off',
-      pushEnvio: this.env.PUSH_ENVIO === 'on' ? 'on' : 'off',
+      pushEnvio: pushSendOn(this.env) ? 'on' : 'off',
       viabilidade: 'nao_medida_na_conta',
     };
     logEvento('medir', {
@@ -164,7 +164,7 @@ export class AgendaPush extends DurableObject {
       programado: pedido && pedido.programado,
       somente: pedido && pedido.somente,
       slug: pedido && pedido.slug,
-      pushEnvio: env.PUSH_ENVIO,
+      pushEnvio: pushSendOn(env) ? 'on' : 'off',
       vapidDisponivel: async () => Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY),
       catalogo: () => baixarCatalogo(fetch, this.urlCatalogo()),
       confirmarNoAr: (caminho) => confirmarNoAr(fetch, caminho),
