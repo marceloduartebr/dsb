@@ -32,6 +32,8 @@ export function createBroadcastSchema(db) {
     note TEXT,
     finished_at TEXT
   )`);
+  // Blog subscriptions Marcelo marked as his own in Admin (8-hex id prefix), besides the fixed alert allowlist.
+  db.exec(`CREATE TABLE IF NOT EXISTS owned (prefix TEXT PRIMARY KEY, marked_by TEXT, marked_at TEXT NOT NULL)`);
   // kind: 'broadcast' (a push to everyone) or 'purge' (delete subscriptions without the current consent).
   try {
     db.exec(`ALTER TABLE broadcasts ADD COLUMN kind TEXT NOT NULL DEFAULT 'broadcast'`);
@@ -97,8 +99,30 @@ export function serviceOf(endpoint = '') {
   return 'other';
 }
 
+export const MAX_OWNED = 6; // keeps a subscribers page within the subrequest budget
+
+/** Marcelo's own blog subscriptions: the fixed alert allowlist plus the ones marked in Admin. */
+export function ownedPrefixes(db) {
+  const marked = db ? db.exec(`SELECT prefix FROM owned ORDER BY marked_at`).map((r) => r.prefix) : [];
+  return new Set([...ALERTA_PREFIXOS, ...marked]);
+}
+
+/** POST /admin/subscribers/mine {id, mine}: marks or unmarks a blog subscription as Marcelo's. The allowlist is fixed. */
+export function markOwned(db, { id, mine, by = '', now = new Date() }) {
+  const p = String(id || '').toLowerCase();
+  if (!/^[0-9a-f]{8}$/.test(p)) return { ok: false, erro: 'id', message: 'Unknown subscriber id.' };
+  if (ALERTA_PREFIXOS.includes(p)) return { ok: false, erro: 'fixed', message: 'Your alert devices are always yours.' };
+  if (mine) {
+    const n = db.exec(`SELECT COUNT(*) AS n FROM owned`)[0].n;
+    const has = db.exec(`SELECT prefix FROM owned WHERE prefix = ?`, [p]).length;
+    if (!has && n >= MAX_OWNED) return { ok: false, erro: 'too_many', message: `At most ${MAX_OWNED} marked devices; unmark one first.` };
+    db.exec(`INSERT OR REPLACE INTO owned (prefix, marked_by, marked_at) VALUES (?, ?, ?)`, [p, String(by).slice(0, 120) || null, now.toISOString()]);
+  } else db.exec(`DELETE FROM owned WHERE prefix = ?`, [p]);
+  return { ok: true };
+}
+
 /** One subscriber as Admin shows it: never the endpoint or keys. */
-export function subscriberView(key, raw) {
+export function subscriberView(key, raw, owned = new Set(ALERTA_PREFIXOS)) {
   let s = null;
   try {
     s = typeof raw === 'string' ? JSON.parse(raw) : null;
@@ -106,11 +130,13 @@ export function subscriberView(key, raw) {
     s = null;
   }
   const id = String(key).slice(4, 12);
-  const mine = ALERTA_PREFIXOS.includes(id); // Marcelo's own subscriptions (the alert allowlist)
-  if (!s || typeof s !== 'object') return { id, mine, unreadable: true };
+  const mine = owned.has(id); // Marcelo's own (alert allowlist or marked in Admin)
+  const fixed = ALERTA_PREFIXOS.includes(id);
+  if (!s || typeof s !== 'object') return { id, mine, fixed, unreadable: true };
   return {
     id,
     mine,
+    fixed,
     device: deviceOf(s.ua),
     service: serviceOf(s.endpoint),
     created: s.criado || null,
@@ -123,15 +149,21 @@ export function subscriberView(key, raw) {
 }
 
 /** GET /admin/subscribers?cursor=: total, a page of up to 30 subscribers and Marcelo's own ones (35 subrequests at most). */
-export async function subscribersPage(kv, cursor = '', limit = 30) {
+export async function subscribersPage(kv, cursor = '', limit = 30, owned = new Set(ALERTA_PREFIXOS)) {
   const total = (await listarTodasChaves(kv, 'sub:')).length;
   const page = await kv.list({ prefix: 'sub:', cursor: cursor || undefined, limit: Math.min(Math.max(limit, 1), 30) });
   const items = [];
-  for (const k of page.keys || []) items.push(subscriberView(k.name, await kv.get(k.name)));
-  // Marcelo's allowlisted subscriptions, whatever page they fall on (2 lists + 2 gets).
+  for (const k of page.keys || []) items.push(subscriberView(k.name, await kv.get(k.name), owned));
+  // Marcelo's own subscriptions, whatever page they fall on: the allowlist (2 lists + 2 gets) and the marked ones
+  // (1 list + 1 get each, at most MAX_OWNED).
   const mine = [];
   for (const a of await resolverAllowlist(kv)) {
-    mine.push(a.chave ? subscriberView(a.chave, await kv.get(a.chave)) : { id: a.prefixo, mine: true, missing: a.erro || 'ausente' });
+    mine.push(a.chave ? subscriberView(a.chave, await kv.get(a.chave), owned) : { id: a.prefixo, mine: true, fixed: true, missing: a.erro || 'ausente' });
+  }
+  for (const p of [...owned].filter((x) => !ALERTA_PREFIXOS.includes(x)).slice(0, MAX_OWNED)) {
+    const l = await kv.list({ prefix: `sub:${p}`, limit: 1 });
+    const k = (l.keys || [])[0];
+    mine.push(k ? subscriberView(k.name, await kv.get(k.name), owned) : { id: p, mine: true, missing: 'ausente' });
   }
   return { total, items, mine, cursor: page.list_complete ? '' : page.cursor || '' };
 }
@@ -196,6 +228,7 @@ export async function broadcastPass(db, env, deps, now = new Date()) {
   const b = activeBroadcast(db);
   if (!b) return { continue: false };
   const purge = b.kind === 'purge';
+  const owned = purge ? ownedPrefixes(db) : null;
   if (!purge && !pushSendOn(env)) {
     db.exec(`UPDATE broadcasts SET state = 'stopped', note = 'PUSH_SEND turned off while sending', finished_at = ? WHERE id = ? AND state = 'sending'`, [now.toISOString(), b.id]);
     return { continue: false };
@@ -214,9 +247,9 @@ export async function broadcastPass(db, env, deps, now = new Date()) {
       rec = null;
     }
     if (purge) {
-      // Keep subscriptions that accepted the current terms and Marcelo's own (the alert allowlist, shown N/A in
-      // Admin); everything else (unreadable included) goes.
-      if ((rec && rec.termo === TERMS_VERSION) || ALERTA_PREFIXOS.includes(k.name.slice(4, 12))) failed++;
+      // Keep subscriptions that accepted the current terms and Marcelo's own (allowlist or marked, N/A in Admin);
+      // everything else (unreadable included) goes.
+      if ((rec && rec.termo === TERMS_VERSION) || owned.has(k.name.slice(4, 12))) failed++;
       else {
         await deps.kv.delete(k.name);
         sent++;

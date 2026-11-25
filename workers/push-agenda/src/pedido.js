@@ -73,6 +73,10 @@ export async function tratarPedido(request, env, agenda, deps = {}) {
       const lidoB = await lerCorpo(request);
       if (lidoB.erro) return json({ ok: false, erro: lidoB.erro }, lidoB.status);
       if (path === '/admin/broadcast/cancel') return json(await agenda.broadcastCancel(String(lidoB.corpo.by || '')));
+      if (path === '/admin/subscribers/mine') {
+        const r = await agenda.markMine({ id: lidoB.corpo.id, mine: lidoB.corpo.mine === true, by: String(lidoB.corpo.by || '') });
+        return json(r, r.ok ? 200 : 409);
+      }
       if (path === '/admin/subscribers/revoke-unconsented') {
         const r = await agenda.purgeStart({ sentBy: String(lidoB.corpo.by || ''), confirm: lidoB.corpo.confirm });
         return json(r, r.ok ? 200 : 409);

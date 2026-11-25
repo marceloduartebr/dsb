@@ -3,7 +3,7 @@ import test from 'node:test';
 import { banco } from './util-banco.mjs';
 import {
   BATCH, BROADCAST_TAG, activeBroadcast, broadcastPass, cancelBroadcast, createBroadcastSchema, deviceOf, recentBroadcasts,
-  serviceOf, startBroadcast, startPurge, subscriberView, subscribersPage, validateMessage
+  serviceOf, startBroadcast, startPurge, subscriberView, subscribersPage, validateMessage, markOwned, ownedPrefixes
 } from '../src/broadcast.js';
 import { tratarPedido } from '../src/pedido.js';
 
@@ -52,7 +52,7 @@ test('subscribers: total, a page without endpoints or keys, device and service i
   assert.equal(p.items.length, 30);
   assert.ok(p.cursor);
   const first = p.items[0];
-  assert.deepEqual(Object.keys(first).sort(), ['accepted', 'consent', 'created', 'device', 'id', 'mine', 'regions', 'service', 'types', 'updated']);
+  assert.deepEqual(Object.keys(first).sort(), ['accepted', 'consent', 'created', 'device', 'fixed', 'id', 'mine', 'regions', 'service', 'types', 'updated']);
   assert.equal(first.mine, false);
   assert.deepEqual(p.mine.map((x) => [x.id, x.missing]), [['568add3d', 'ausente'], ['d48327b1', 'ausente']]);
   assert.equal(first.id, '00000000');
@@ -62,7 +62,7 @@ test('subscribers: total, a page without endpoints or keys, device and service i
   assert.equal((await subscribersPage(k, p.cursor)).items.length, 5);
   assert.equal(deviceOf(''), 'Unknown');
   assert.equal(serviceOf('nope'), 'unknown');
-  assert.deepEqual(subscriberView('sub:abcdef1234', '{bad'), { id: 'abcdef12', mine: false, unreadable: true });
+  assert.deepEqual(subscriberView('sub:abcdef1234', '{bad'), { id: 'abcdef12', mine: false, fixed: false, unreadable: true });
   const k2 = kv(3);
   k2.m.set(`sub:568add3d${'0'.repeat(56)}`, JSON.stringify({ endpoint: 'https://web.push.apple.com/me', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) Safari/604.1' }));
   const p2 = await subscribersPage(k2, '');
@@ -202,4 +202,40 @@ test('route: revoke-unconsented reaches the agenda with the typed count, behind 
   const r = await tratarPedido(req({ Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' }), env, agenda);
   assert.equal(r.status, 409);
   assert.deepEqual(calls, [{ sentBy: 'm', confirm: 7 }]);
+});
+
+test('owned: Marcelo marks blog subscriptions as his; they list as mine, purge keeps them; the allowlist is fixed; at most 6', async () => {
+  const d = db();
+  const k = kv(10);
+  const id = '00000000';
+  assert.equal(markOwned(d, { id: 'xyz', mine: true }).erro, 'id');
+  assert.equal(markOwned(d, { id: '568add3d', mine: false }).erro, 'fixed');
+  // kv(10) keys are zero-padded: 00000000… is subscriber 0; give subscriber 7 a unique prefix to mark.
+  const key7 = `sub:${String(7).padStart(64, '0')}`;
+  const rec7 = k.m.get(key7);
+  k.m.delete(key7);
+  k.m.set(`sub:7777abcd${'0'.repeat(56)}`, rec7);
+  assert.equal(markOwned(d, { id: '7777ABCD', mine: true, by: 'm@x' }).ok, true);
+  const owned = ownedPrefixes(d);
+  assert.ok(owned.has('7777abcd') && owned.has('568add3d'));
+  const p = await subscribersPage(k, '', 30, owned);
+  assert.deepEqual(p.mine.map((x) => [x.id, x.mine, Boolean(x.fixed)]), [['568add3d', true, true], ['d48327b1', true, true], ['7777abcd', true, false]]);
+  assert.equal(p.items.find((x) => x.id === '7777abcd').mine, true);
+  assert.equal(p.items.find((x) => x.id === id).mine, false);
+  startPurge(d, { confirm: 10, total: 10 });
+  let r;
+  do { r = await broadcastPass(d, {}, { kv: k, send: async () => ({ classe: 'ok' }) }); } while (r.continue);
+  assert.deepEqual([...k.m.keys()].map((x) => x.slice(4, 12)), ['7777abcd'], 'only the marked one survives');
+  assert.equal(markOwned(d, { id: '7777abcd', mine: false }).ok, true);
+  assert.equal(ownedPrefixes(d).has('7777abcd'), false);
+  for (let i = 0; i < 6; i++) markOwned(d, { id: `0000000${i}`, mine: true });
+  assert.equal(markOwned(d, { id: 'abcdef01', mine: true }).erro, 'too_many');
+});
+
+test('route: /admin/subscribers/mine reaches the agenda', async () => {
+  const calls = [];
+  const agenda = { markMine: async (x) => { calls.push(x); return { ok: true }; } };
+  const r = await tratarPedido(new Request('https://p.test/admin/subscribers/mine', { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ id: 'abcd1234', mine: true, by: 'm' }) }), { BROADCAST_TOKEN: TOKEN }, agenda);
+  assert.equal(r.status, 200);
+  assert.deepEqual(calls, [{ id: 'abcd1234', mine: true, by: 'm' }]);
 });
