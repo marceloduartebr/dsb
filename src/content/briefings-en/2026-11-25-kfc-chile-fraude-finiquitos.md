@@ -1,5 +1,5 @@
 ---
-title: "KFC Chile files criminal complaint for computer fraud after 51.9 million pesos in severance pay were diverted"
+title: "KFC Chile investigates fraud: a former supervisor's still-active credential diverted 51.9 million pesos in severance pay for 73 workers"
 description: "A former supervisor's still-active credential let someone swap two payroll files on BCI Empresas and divert the severance pay of 73 workers."
 pubDate: 2026-11-25T17:05:00-03:00
 sourceName: "BioBioChile"

@@ -1,5 +1,5 @@
 ---
-title: "KFC Chile se querella por fraude informático tras el desvío de 51,9 millones de pesos de finiquitos"
+title: "KFC Chile investiga un fraude: la credencial activa de una exsupervisora desvió 51,9 millones de pesos de finiquitos de 73 trabajadores"
 description: "La credencial activa de una exsupervisora permitió cambiar dos nóminas de pago en BCI Empresas y desviar los finiquitos de 73 trabajadores."
 pubDate: 2026-11-25T17:05:00-03:00
 sourceName: "BioBioChile"
