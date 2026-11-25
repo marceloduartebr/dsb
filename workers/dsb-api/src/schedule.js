@@ -291,7 +291,7 @@ export async function runNow(env, db, body, session, now = Date.now(), fetchFn =
 /**
  * POST /schedule/claim {job, run_key?} — the run's first call (Claude tasks and Grok webhooks).
  * - run_key given (Grok): that fire, if it exists, is of this job and is not claimed yet.
- * - no run_key (Claude): the oldest unclaimed fire of the job started in the last 2 h; with none (Run now in
+ * - no run_key (Claude): the newest real start of the job in the last 2 h (else the newest log-only record); with none (Run now in
  *   claude.ai), a manual fire of the job's latest slot of the day.
  * Refused (409): unknown or repeated run_key, or the job already has a claimed run. With no claim, the run stops.
  */
@@ -310,8 +310,13 @@ export async function claimRun(db, body, session, now = Date.now()) {
     if (!['logged', 'fired', 'failed'].includes(fire.status)) throw new ApiError(409, 'no_slot', `This run_key is already ${fire.status}: stop the run`);
   } else {
     const since = new Date(now - 120 * 60000).toISOString();
+    // The start that launched this run: a real start (fired) before a log-only record, newest first. A log-only
+    // record left from before the timer went live must not win over the start that actually opened this session.
     fire = await db
-      .prepare(`SELECT * FROM schedule_fires WHERE job = ?1 AND status IN ('logged','fired') AND created_at >= ?2 ORDER BY id LIMIT 1`)
+      .prepare(
+        `SELECT * FROM schedule_fires WHERE job = ?1 AND status IN ('logged','fired') AND created_at >= ?2
+         ORDER BY CASE status WHEN 'fired' THEN 0 ELSE 1 END, id DESC LIMIT 1`
+      )
       .bind(job, since)
       .first();
     if (!fire) {

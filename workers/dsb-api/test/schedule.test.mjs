@@ -307,3 +307,13 @@ test('Next rounds preview follows the schedule: moved time, skipped days, off sl
   assert.equal(u.find((r) => r.round === 'linkedin_afternoon').inactive, 'Off in the schedule');
   assert.ok(u.findIndex((r) => r.round === 'blog_morning') > u.findIndex((r) => r.round === 'blog_afternoon'));
 });
+
+test('claim (Claude): the real start wins over a log-only record left from before the timer went live', async () => {
+  const { env, call, fires } = setup();
+  const now = new Date().toISOString();
+  await env.DB.prepare(`INSERT INTO schedule_fires (slot, job, provider, run_date, run_key, status, fired_at) VALUES ('covers','covers','claude','2099-01-01','2099-01-01-0800-covers','logged', ?1)`).bind(now).run();
+  await env.DB.prepare(`INSERT INTO schedule_fires (slot, job, provider, run_date, run_key, manual, status, fired_at) VALUES ('covers','covers','claude','2099-01-01','2099-01-01-0907-covers-now',1,'fired', ?1)`).bind(now).run();
+  const c = await call('POST', '/schedule/claim', { job: 'covers' });
+  assert.equal(c.body.run_key, '2099-01-01-0907-covers-now');
+  assert.equal((await fires()).find((f) => f.run_key === '2099-01-01-0800-covers').status, 'logged', 'the log-only record is left alone');
+});
