@@ -6,6 +6,7 @@
 import { pushSendOn } from './logica.js';
 import { tokensIguais } from './auth.js';
 import { listarTodasChaves } from './kv-lista.js';
+import { ALERTA_PREFIXOS, resolverAllowlist } from './alerta.js';
 
 export const SITE = 'https://dsb.duarte.top';
 export const BATCH = 8; // per pass: 1 list + 8 gets + 8 sends + up to 8 deletes = 25 subrequests
@@ -97,9 +98,11 @@ export function subscriberView(key, raw) {
     s = null;
   }
   const id = String(key).slice(4, 12);
-  if (!s || typeof s !== 'object') return { id, unreadable: true };
+  const mine = ALERTA_PREFIXOS.includes(id); // Marcelo's own subscriptions (the alert allowlist)
+  if (!s || typeof s !== 'object') return { id, mine, unreadable: true };
   return {
     id,
+    mine,
     device: deviceOf(s.ua),
     service: serviceOf(s.endpoint),
     created: s.criado || null,
@@ -109,13 +112,18 @@ export function subscriberView(key, raw) {
   };
 }
 
-/** GET /admin/subscribers?cursor=: total count and a page of up to 30 subscribers (31 subrequests at most). */
+/** GET /admin/subscribers?cursor=: total, a page of up to 30 subscribers and Marcelo's own ones (35 subrequests at most). */
 export async function subscribersPage(kv, cursor = '', limit = 30) {
   const total = (await listarTodasChaves(kv, 'sub:')).length;
   const page = await kv.list({ prefix: 'sub:', cursor: cursor || undefined, limit: Math.min(Math.max(limit, 1), 30) });
   const items = [];
   for (const k of page.keys || []) items.push(subscriberView(k.name, await kv.get(k.name)));
-  return { total, items, cursor: page.list_complete ? '' : page.cursor || '' };
+  // Marcelo's allowlisted subscriptions, whatever page they fall on (2 lists + 2 gets).
+  const mine = [];
+  for (const a of await resolverAllowlist(kv)) {
+    mine.push(a.chave ? subscriberView(a.chave, await kv.get(a.chave)) : { id: a.prefixo, mine: true, missing: a.erro || 'ausente' });
+  }
+  return { total, items, mine, cursor: page.list_complete ? '' : page.cursor || '' };
 }
 
 // ---------------------------------------------------------------- the broadcast job
