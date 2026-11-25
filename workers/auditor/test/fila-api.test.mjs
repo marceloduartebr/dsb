@@ -185,7 +185,7 @@ test('Panel issue list is read live: a resolved issue leaves at once; a second c
 });
 
 test('URLs are English everywhere: /panel and ?tab=views&window=; old /painel links redirect', async () => {
-  const stg = { DATA_SOURCE: 'api', AMBIENTE: 'stg' };
+  const stg = { DATA_SOURCE: 'api', APP_ENV: 'stg' };
   let r = await tratar(new Request('https://dsba-stg.duarte.top/painel?aba=leituras&janela=24h&sev=error'), stg);
   assert.equal(r.status, 301);
   assert.equal(r.headers.get('Location'), '/panel?tab=views&window=24h&sev=error');

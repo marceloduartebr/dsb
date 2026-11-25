@@ -146,7 +146,7 @@ export async function tratar(request, env, ctx, deps = {}) {
     const aba = url.searchParams.get('tab') === 'views' ? 'leituras' : '';
     if (aba === 'leituras') {
       const janela = url.searchParams.get('window') || '7d';
-      return html(renderLeituras(await obterLeituras(env), { janela, ambiente: env.AMBIENTE === 'stg' ? 'stg' : '' }));
+      return html(renderLeituras(await obterLeituras(env), { janela, ambiente: env.APP_ENV === 'stg' ? 'stg' : '' }));
     }
     let ultimo = await lerUltimo(env.DSB_AUDITOR);
     // STG has no cron (account cron limit): RUN_ON_VIEW=on runs the audit when the panel is opened
@@ -168,7 +168,7 @@ export async function tratar(request, env, ctx, deps = {}) {
     const flash = usesApi(env) && (url.searchParams.get('ok') || url.searchParams.get('err'))
       ? { texto: String(url.searchParams.get('ok') || url.searchParams.get('err')).slice(0, 300), erro: !url.searchParams.get('ok') }
       : null;
-    return html(renderPainel(ultimo, { ultimoAlerta, ambiente: env.AMBIENTE === 'stg' ? 'stg' : '', flash, fonte: usesApi(env) ? 'api' : 'notion' }));
+    return html(renderPainel(ultimo, { ultimoAlerta, ambiente: env.APP_ENV === 'stg' ? 'stg' : '', flash, fonte: usesApi(env) ? 'api' : 'notion' }));
   }
 
   if (!['/status', '/capas-faltando', '/rodar'].includes(path)) return json({ ok: false, erro: 'nao_encontrado' }, 404);
