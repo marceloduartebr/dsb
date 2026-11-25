@@ -195,7 +195,7 @@ async function dispatch({ route, db, url, body, id, session, env, parts }) {
       return { body: { sweep: await sweep(db) } };
     case 'POST /jobs': {
       const job = await startJob(db, body, session);
-      await linkJob(db, body && body.run_key, job.id);
+      await linkJob(db, body && body.run_key, job.id, job.job);
       return { body: { job }, status: 201 };
     }
     case 'GET /push/settings':

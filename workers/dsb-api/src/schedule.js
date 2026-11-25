@@ -340,10 +340,35 @@ export async function claimRun(db, body, session, now = Date.now()) {
   return { slot: row.slot, job: row.job, round: row.round, run_key: row.run_key, manual: !!row.manual };
 }
 
-/** POST /jobs {job, run_key}: links the job run to its fire. */
-export async function linkJob(db, runKeyValue, jobRunId) {
-  if (!runKeyValue) return;
-  await db.prepare(`UPDATE schedule_fires SET job_run_id = ?2 WHERE run_key = ?1 AND status = 'claimed'`).bind(String(runKeyValue), jobRunId).run();
+/** The schedule job a job-run name belongs to ('x-publish' → x_publish, 'blog-publish-stg' → blog), or null. */
+export function fireJobOf(jobName) {
+  const j = String(jobName || '').toLowerCase().replace(/-stg$/, '').replace(/-/g, '_');
+  const map = { blog_publish: 'blog', linkedin_publish: 'linkedin', x_removals: null };
+  const out = j in map ? map[j] : j;
+  return JOBS.includes(out) ? out : null;
+}
+
+/**
+ * POST /jobs {job, run_key?}: links the job run to its claimed fire, so closing the job closes the run.
+ * With run_key: that fire. Without it (Grok's runs do not send it): the newest claimed fire of the same schedule
+ * job, claimed in the last 3 h. Either way the newest job wins: a run that opened its job twice (a lost reply)
+ * is closed by the job it finished in, not by the stray duplicate it closed as an error.
+ */
+export async function linkJob(db, runKeyValue, jobRunId, jobName = null, now = Date.now()) {
+  if (runKeyValue) {
+    await db.prepare(`UPDATE schedule_fires SET job_run_id = ?2 WHERE run_key = ?1 AND status = 'claimed'`).bind(String(runKeyValue), jobRunId).run();
+    return;
+  }
+  const job = fireJobOf(jobName);
+  if (!job) return;
+  const since = new Date(now - RUN_LIMIT_MIN * 60000).toISOString();
+  await db
+    .prepare(
+      `UPDATE schedule_fires SET job_run_id = ?2 WHERE id = (
+         SELECT id FROM schedule_fires WHERE job = ?1 AND status = 'claimed' AND claimed_at >= ?3 ORDER BY claimed_at DESC, id DESC LIMIT 1)`
+    )
+    .bind(job, jobRunId, since)
+    .run();
 }
 
 /**

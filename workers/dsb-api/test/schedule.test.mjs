@@ -132,6 +132,36 @@ test('Grok (live): webhook gets run_key + env and Bearer key; claim needs that e
   assert.equal(twice.status, 409, 'a repeated run_key is refused');
 });
 
+test('Grok jobs without run_key link to the claimed run; a duplicate job does not fail the run; x-removals is not linked', async () => {
+  const { env, call, fires } = setup({ SCHEDULE_MODE: 'live', DSB_ENV: 'prod', START_URL_X_PUBLISH: 'https://hooks.example/x-publish', START_KEY_X_PUBLISH: 'xkey-123' });
+  await call('PATCH', '/schedule/x_afternoon', { mode: 'on' }, { internal: true });
+  await tick(env, Date.now(), fakeFetch({ status: 200 }));
+  const grok = { token: TOKENS.TOKEN_GROK };
+  let f = (await fires()).find((x) => x.slot === 'x_afternoon');
+  if (!f) {
+    // Outside 18:00 the tick fires nothing: use Run now, as Admin does.
+    await call('POST', '/schedule/run', { slot: 'x_afternoon' }, { internal: true });
+    f = (await fires()).find((x) => x.slot === 'x_afternoon');
+  }
+  assert.equal((await call('POST', '/schedule/claim', { job: 'x_publish', run_key: f.run_key }, grok)).status, 200);
+  const rem = await call('POST', '/jobs', { job: 'x-removals' }, grok);
+  const j1 = await call('POST', '/jobs', { job: 'x-publish' }, grok);
+  const j2 = await call('POST', '/jobs', { job: 'x-publish' }, grok);
+  await call('PATCH', `/jobs/${rem.body.job.id}`, { status: 'skipped', notes: 'no X rows' }, grok);
+  assert.equal((await fires()).find((x) => x.id === f.id).status, 'claimed', 'x-removals does not close the run');
+  await call('PATCH', `/jobs/${j1.body.job.id}`, { status: 'error', notes: 'duplicate opening' }, grok);
+  assert.equal((await fires()).find((x) => x.id === f.id).status, 'claimed', 'the stray duplicate does not fail the run');
+  await call('PATCH', `/jobs/${j2.body.job.id}`, { status: 'ok', notes: '2 tweets' }, grok);
+  const done = (await fires()).find((x) => x.id === f.id);
+  assert.equal(done.status, 'done');
+  assert.equal(done.job_run_id, j2.body.job.id);
+});
+
+test('fireJobOf: job-run names to schedule jobs', async () => {
+  const { fireJobOf } = await import('../src/schedule.js');
+  assert.deepEqual(['x-publish', 'x-radar', 'blog-publish', 'linkedin-publish-stg', 'covers', 'curation', 'x-removals', 'removals', ''].map(fireJobOf), ['x_publish', 'x_radar', 'blog', 'linkedin', 'covers', 'curation', null, null, null]);
+});
+
 test('Claude (live): task URL with anthropic-version, no text; 401 = failed + fire_failed issue; 503 retried once', async () => {
   const { env, fires, issues } = setup({ SCHEDULE_MODE: 'live', START_URL_COVERS: 'https://api.anthropic.com/v1/claude_code/routines/trig_X/fire', START_KEY_COVERS: 'sk-ant-oat01-x' });
   const ok = fakeFetch({ status: 503 }, { status: 200, body: { type: 'routine_fire', claude_code_session_url: 'https://claude.ai/code/session_1' } });
