@@ -70,9 +70,8 @@ test('tick (log mode): due slots recorded once a day; over 60 min late = missed 
   assert.deepEqual(f.map((x) => [x.slot, x.status]), [['curation', 'missed'], ['covers', 'logged'], ['blog_morning', 'logged']]);
   assert.equal(f.at(-1).run_key, '2026-11-25-0830-blog_morning');
   assert.ok(r.done.find((d) => d.slot === 'curation' && d.action === 'missed'));
-  const miss = (await issues()).find((i) => i.kind === 'slot_missed');
-  assert.match(miss.summary, /Curation 07:00 did not start \(found 91 min late\)/);
-  assert.equal((await outbox()).filter((o) => o.kind === 'issue').length, 1, 'the missed slot is pushed');
+  assert.equal((await issues()).filter((i) => i.kind === 'slot_missed').length, 0, 'log-only mode: recorded, not reported');
+  assert.equal((await outbox()).filter((o) => o.kind === 'issue').length, 0);
   await tick(env, at('2026-11-25T08:36:00'), fetchFn);
   assert.equal((await fires()).length, 3, 'a second pass the same day adds nothing');
   // next day, before 07:00, nothing is due
@@ -316,4 +315,13 @@ test('claim (Claude): the real start wins over a log-only record left from befor
   const c = await call('POST', '/schedule/claim', { job: 'covers' });
   assert.equal(c.body.run_key, '2099-01-01-0907-covers-now');
   assert.equal((await fires()).find((f) => f.run_key === '2099-01-01-0800-covers').status, 'logged', 'the log-only record is left alone');
+});
+
+test('live mode: a slot over 60 min late is missed, reported and pushed', async () => {
+  const { env, issues, outbox, fires } = setup({ SCHEDULE_MODE: 'live' });
+  await tick(env, at('2026-11-25T08:31:00'), fakeFetch({ status: 200 }));
+  assert.equal((await fires()).find((f) => f.slot === 'curation').status, 'missed');
+  const miss = (await issues()).find((i) => i.kind === 'slot_missed');
+  assert.match(miss.summary, /Curation 07:00 did not start \(found 91 min late\)/);
+  assert.ok((await outbox()).find((o) => o.kind === 'issue' && o.dedup_key === `issue:${miss.id}`));
 });
