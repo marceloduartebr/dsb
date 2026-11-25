@@ -256,8 +256,8 @@ export async function tick(env, now = Date.now(), fetchFn = fetch) {
       // Log-only mode: the timed tasks still run the rounds, so a late slot is recorded but not reported.
       if (f && scheduleMode(env) === 'live') {
         await report(db, { fingerprint: `schedule:missed:${f.run_key}`, kind: 'slot_missed', severity: 'error', summary: `${s.label} ${s.time} did not start (found ${late} min late)`, suggested_action: 'Use Run now in DSB Admin (Flow, Schedule) if the round is still needed.' });
-        done.push({ slot: s.slot, action: 'missed' });
       }
+      if (f) done.push({ slot: s.slot, action: 'missed' });
       continue;
     }
     // Order: one run per job at a time; X Publish waits for any blog run.

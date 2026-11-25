@@ -61,7 +61,7 @@ test('schedule: seeded with today\'s times; Grok slots start off; Brasília cale
   assert.equal(nextAt({ time: '08:00', days: '12345', mode: 'on' }, at('2026-11-27T09:00:00'), false), '2026-11-30T11:00:00.000Z'); // Fri → Mon
 });
 
-test('tick (log mode): due slots recorded once a day; over 60 min late = missed + issue + push; nothing started', async () => {
+test('tick (log mode): due slots recorded once a day; over 60 min late = missed, not reported; nothing started', async () => {
   const { env, fires, issues, outbox } = setup();
   const fetchFn = fakeFetch({ status: 200 });
   const r = await tick(env, at('2026-11-25T08:31:00'), fetchFn);
