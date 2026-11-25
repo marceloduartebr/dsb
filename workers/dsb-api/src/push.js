@@ -222,7 +222,7 @@ export async function goingStalePush(db, now, { readPlan, staleList }) {
     kind: 'going_stale',
     dedup_key: `stale:${day}`,
     title: `${soon.length} ${soon.length === 1 ? 'post goes' : 'posts go'} stale ${when}`,
-    body: soon.slice(0, 3).map((p) => `#${p.id}`).join(', ') + (soon.length > 3 ? ` and ${soon.length - 3} more` : ''),
+    body: 'Open Flow to see them',
     url: '/flow#stale'
   }, now);
   return soon.length;

@@ -386,14 +386,17 @@ export async function closeFireOfJob(db, job, env = {}, now = Date.now()) {
   const outcome = status === 'error' ? 'failed' : 'success';
   if (!(await runPushAllowed(db, fire.job, outcome))) return;
   const slot = (await db.prepare('SELECT label, time FROM schedule_slots WHERE slot = ?1').bind(fire.slot).first()) || { label: fire.slot, time: '' };
-  const counts = job.items_written != null && outcome === 'success' ? ` · ${job.items_written} written` : '';
+  // Counts only (Marcelo, 2026-11-25): the job notes list items and get cut on the phone; they stay in Flow/Audit.
+  const n = (v) => (Number.isInteger(v) ? v : null);
+  const counts = [n(job.items_read) != null ? `${job.items_read} read` : '', n(job.items_written) != null ? `${job.items_written} written` : ''].filter(Boolean).join(' · ');
   const word = status === 'done' ? 'done' : status === 'skipped' ? 'skipped' : 'failed';
+  const body = outcome === 'failed' ? 'Ended with an error · details in Audit' : counts || (status === 'skipped' ? 'Nothing to do' : 'Finished OK');
   await enqueue(db, {
     kind: outcome === 'failed' ? 'run_failed' : 'run_done',
     dedup_key: `run:${fire.run_key}`,
     severity: outcome === 'failed' ? 'error' : 'info',
     title: `${slot.label}${fire.manual ? ' (Run now)' : ` ${slot.time}`} ${word}`,
-    body: `${String(job.notes || '').slice(0, 160)}${counts}`.trim() || (status === 'done' ? 'Finished OK' : status === 'skipped' ? 'Nothing to do' : 'Ended with an error'),
+    body,
     url: outcome === 'failed' ? '/audit' : '/flow#schedule'
   }, now);
 }

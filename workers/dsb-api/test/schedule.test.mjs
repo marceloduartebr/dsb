@@ -315,7 +315,7 @@ test('going stale: one push a day from 09:00 when posts turn stale the next busi
   const st = (await outbox()).filter((o) => o.kind === 'going_stale');
   assert.equal(st.length, 1);
   assert.equal(st[0].title, '1 post goes stale tomorrow');
-  assert.equal(st[0].body, `#${id}`);
+  assert.equal(st[0].body, 'Open Flow to see them');
 });
 
 test('timer route: STG runs it by hand (Admin or Claude); Grok cannot', async () => {
@@ -393,7 +393,8 @@ test('push settings: Admin only; per job all/success/failed/off decides run push
   assert.equal(f.kind, 'run_failed');
   assert.equal(f.severity, 'error');
   assert.equal(f.title, 'LinkedIn morning (Run now) failed');
-  assert.equal(f.body, 'cover gate');
+  assert.equal(f.body, 'Ended with an error · details in Audit', 'counts only: the notes stay in Audit');
+  assert.equal(ob.find((o) => o.dedup_key === `run:${cur}`).body, '2 written');
   assert.equal(ob.find((o) => o.dedup_key === `run:${cur}`).title, 'Covers (Run now) done'.replace('Covers', 'Curation'));
   assert.equal(ob.filter((o) => o.kind === 'issue').length, 0, 'job_failed of a scheduled run is not pushed again as an issue');
   // new posts off
