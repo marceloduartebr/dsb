@@ -12,6 +12,8 @@ export const SITE = 'https://dsb.duarte.top';
 export const BATCH = 8; // per pass: 1 list + 8 gets + 8 sends + up to 8 deletes = 25 subrequests
 export const PASS_GAP_MS = 15_000;
 export const BROADCAST_TAG = 'dsb-broadcast';
+/** Current consent terms version on the blog (/notificacoes, worker/index.js). */
+export const TERMS_VERSION = '1.0';
 
 export function createBroadcastSchema(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS broadcasts (
@@ -30,6 +32,12 @@ export function createBroadcastSchema(db) {
     note TEXT,
     finished_at TEXT
   )`);
+  // kind: 'broadcast' (a push to everyone) or 'purge' (delete subscriptions without the current consent).
+  try {
+    db.exec(`ALTER TABLE broadcasts ADD COLUMN kind TEXT NOT NULL DEFAULT 'broadcast'`);
+  } catch {
+    /* already there */
+  }
 }
 
 export async function authorizeBroadcast(request, env) {
@@ -108,7 +116,9 @@ export function subscriberView(key, raw) {
     created: s.criado || null,
     updated: s.atualizado || null,
     types: Array.isArray(s.tipos) ? s.tipos : null,
-    regions: Array.isArray(s.regioes) ? s.regioes : null
+    regions: Array.isArray(s.regioes) ? s.regioes : null,
+    consent: typeof s.termo === 'string' ? s.termo : null,
+    accepted: typeof s.aceito_em === 'string' ? s.aceito_em : null
   };
 }
 
@@ -135,7 +145,7 @@ export function activeBroadcast(db) {
 }
 
 export function recentBroadcasts(db, n = 10) {
-  return db.exec(`SELECT id, title, body, url, sent_by, created_at, state, total, sent, expired, failed, note, finished_at FROM broadcasts ORDER BY id DESC LIMIT ?`, [n]);
+  return db.exec(`SELECT id, kind, title, body, url, sent_by, created_at, state, total, sent, expired, failed, note, finished_at FROM broadcasts ORDER BY id DESC LIMIT ?`, [n]);
 }
 
 /**
@@ -150,6 +160,22 @@ export function startBroadcast(db, env, { payload, sentBy, confirm, total, now =
   db.exec(
     `INSERT INTO broadcasts (title, body, url, sent_by, created_at, state, total) VALUES (?, ?, ?, ?, ?, 'sending', ?)`,
     [payload.titulo, payload.texto, payload.url, String(sentBy || '').slice(0, 120) || null, now.toISOString(), total]
+  );
+  return { ok: true, broadcast: activeBroadcast(db) };
+}
+
+/**
+ * Starts a purge: deletes every subscription that has no acceptance of the current consent terms, in the same
+ * batches and lane as a broadcast (one job at a time). Sends nothing, so PUSH_SEND does not apply.
+ * `confirm` must be the current subscriber count. In the row: sent = revoked, failed = kept (consented).
+ */
+export function startPurge(db, { sentBy, confirm, total, now = new Date() }) {
+  if (activeBroadcast(db)) return { ok: false, erro: 'broadcast_running', message: 'A broadcast or revoke is already running.' };
+  if (!Number.isInteger(total) || total < 1) return { ok: false, erro: 'no_subscribers', message: 'There are no subscribers.' };
+  if (Number(confirm) !== total) return { ok: false, erro: 'confirm_mismatch', message: `Type the subscriber count (${total}) to confirm.` };
+  db.exec(
+    `INSERT INTO broadcasts (kind, title, body, url, sent_by, created_at, state, total) VALUES ('purge', ?, '', '', ?, ?, 'sending', ?)`,
+    [`Revoke subscriptions without consent v${TERMS_VERSION}`, String(sentBy || '').slice(0, 120) || null, now.toISOString(), total]
   );
   return { ok: true, broadcast: activeBroadcast(db) };
 }
@@ -169,7 +195,8 @@ export function cancelBroadcast(db, { by = '', now = new Date() } = {}) {
 export async function broadcastPass(db, env, deps, now = new Date()) {
   const b = activeBroadcast(db);
   if (!b) return { continue: false };
-  if (!pushSendOn(env)) {
+  const purge = b.kind === 'purge';
+  if (!purge && !pushSendOn(env)) {
     db.exec(`UPDATE broadcasts SET state = 'stopped', note = 'PUSH_SEND turned off while sending', finished_at = ? WHERE id = ? AND state = 'sending'`, [now.toISOString(), b.id]);
     return { continue: false };
   }
@@ -185,6 +212,15 @@ export async function broadcastPass(db, env, deps, now = new Date()) {
       rec = typeof raw === 'string' ? JSON.parse(raw) : null;
     } catch {
       rec = null;
+    }
+    if (purge) {
+      // Keep only subscriptions that accepted the current terms; everything else (unreadable included) goes.
+      if (rec && rec.termo === TERMS_VERSION) failed++;
+      else {
+        await deps.kv.delete(k.name);
+        sent++;
+      }
+      continue;
     }
     if (!rec || !rec.endpoint) {
       failed++;

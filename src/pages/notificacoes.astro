@@ -378,7 +378,9 @@ const REGIOES = [
     const r =
       (await navigator.serviceWorker.ready.catch(() => null)) || (await reg());
     const sub = await r.pushManager.getSubscription();
-    mostra(!!sub && Notification.permission === 'granted');
+    // Without this device's acceptance of the current terms the subscription counts as off: it was made before
+    // the terms or revoked on the server, so the reader ticks the box and «Receber avisos» re-enrolls it.
+    mostra(!!sub && Notification.permission === 'granted' && termoAceitoLocal());
   }
 
   const MSG_TERMO = 'Para ativar, marque «Li e concordo» com o termo de consentimento.';

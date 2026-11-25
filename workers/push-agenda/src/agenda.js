@@ -24,6 +24,7 @@ import {
   PASS_GAP_MS,
   recentBroadcasts,
   startBroadcast,
+  startPurge,
   subscribersPage,
 } from './broadcast.js';
 
@@ -280,6 +281,17 @@ export class AgendaPush extends DurableObject {
     const total = (await subscribersPage(this.env.DSB_PUSH, '', 1)).total;
     const r = startBroadcast(this.db(), this.env, { payload, sentBy, confirm, total });
     logEvento('broadcast', { resultado: r.ok ? 'iniciado' : r.erro, total });
+    if (r.ok) {
+      await this.ctx.storage.put('broadcastAt', Date.now());
+      await this.schedule();
+    }
+    return r;
+  }
+
+  async purgeStart({ sentBy, confirm }) {
+    const total = (await subscribersPage(this.env.DSB_PUSH, '', 1)).total;
+    const r = startPurge(this.db(), { sentBy, confirm, total });
+    logEvento('purge', { resultado: r.ok ? 'iniciado' : r.erro, total });
     if (r.ok) {
       await this.ctx.storage.put('broadcastAt', Date.now());
       await this.schedule();

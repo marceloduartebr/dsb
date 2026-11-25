@@ -58,7 +58,7 @@ export async function tratarPedido(request, env, agenda, deps = {}) {
   }
 
   // Broadcast and subscriber list (DSB Admin, Push tab): own token BROADCAST_TOKEN, never ADMIN_TOKEN or ALERTA_TOKEN.
-  if (path === '/admin/subscribers' || path.startsWith('/admin/broadcast')) {
+  if (path.startsWith('/admin/subscribers') || path.startsWith('/admin/broadcast')) {
     const authB = await authorizeBroadcast(request, env);
     if (!authB.ok) {
       logEvento('broadcast', { resultado: authB.status === 503 ? 'nao_configurado' : 'negado' });
@@ -73,6 +73,10 @@ export async function tratarPedido(request, env, agenda, deps = {}) {
       const lidoB = await lerCorpo(request);
       if (lidoB.erro) return json({ ok: false, erro: lidoB.erro }, lidoB.status);
       if (path === '/admin/broadcast/cancel') return json(await agenda.broadcastCancel(String(lidoB.corpo.by || '')));
+      if (path === '/admin/subscribers/revoke-unconsented') {
+        const r = await agenda.purgeStart({ sentBy: String(lidoB.corpo.by || ''), confirm: lidoB.corpo.confirm });
+        return json(r, r.ok ? 200 : 409);
+      }
       const v = validateMessage(lidoB.corpo);
       if (v.erro) return json({ ok: false, erro: v.erro }, 400);
       if (path === '/admin/broadcast/test') {

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { banco } from './util-banco.mjs';
 import {
   BATCH, BROADCAST_TAG, activeBroadcast, broadcastPass, cancelBroadcast, createBroadcastSchema, deviceOf, recentBroadcasts,
-  serviceOf, startBroadcast, subscriberView, subscribersPage, validateMessage
+  serviceOf, startBroadcast, startPurge, subscriberView, subscribersPage, validateMessage
 } from '../src/broadcast.js';
 import { tratarPedido } from '../src/pedido.js';
 
@@ -52,7 +52,7 @@ test('subscribers: total, a page without endpoints or keys, device and service i
   assert.equal(p.items.length, 30);
   assert.ok(p.cursor);
   const first = p.items[0];
-  assert.deepEqual(Object.keys(first).sort(), ['created', 'device', 'id', 'mine', 'regions', 'service', 'types', 'updated']);
+  assert.deepEqual(Object.keys(first).sort(), ['accepted', 'consent', 'created', 'device', 'id', 'mine', 'regions', 'service', 'types', 'updated']);
   assert.equal(first.mine, false);
   assert.deepEqual(p.mine.map((x) => [x.id, x.missing]), [['568add3d', 'ausente'], ['d48327b1', 'ausente']]);
   assert.equal(first.id, '00000000');
@@ -165,4 +165,40 @@ test('a cancel that lands while a pass is sending is kept: the pass counts its s
   assert.equal(activeBroadcast(d), null);
   assert.equal(startBroadcast(d, ON, { payload: validateMessage({ title: 't', body: 'b' }).payload, confirm: 20, total: 20 }).ok, true);
   assert.equal(d.exec(`SELECT COUNT(*) AS n FROM broadcasts WHERE state = 'sending'`)[0].n, 1);
+});
+
+test('purge: deletes every subscription without the current consent, keeps the consented ones, sends nothing, ignores PUSH_SEND', async () => {
+  const d = db();
+  const k = kv(20);
+  for (const i of [3, 11, 17]) {
+    const key = `sub:${String(i).padStart(64, '0')}`;
+    k.m.set(key, JSON.stringify({ ...JSON.parse(k.m.get(key)), termo: '1.0', aceito_em: '2026-11-25T17:00:00Z' }));
+  }
+  k.m.set(`sub:${'f'.repeat(64)}`, '{bad');
+  assert.equal(startPurge(d, { confirm: 20, total: 21 }).erro, 'confirm_mismatch');
+  assert.equal(startPurge(d, { confirm: 21, total: 21, sentBy: 'm@x' }).ok, true);
+  assert.equal(startBroadcast(d, ON, { payload: validateMessage({ title: 't', body: 'b' }).payload, confirm: 21, total: 21 }).erro, 'broadcast_running', 'one job at a time');
+  let sends = 0;
+  let r;
+  let passes = 0;
+  do { r = await broadcastPass(d, {}, { kv: k, send: async () => { sends++; return { classe: 'ok' }; } }); passes++; } while (r.continue && passes < 10);
+  assert.equal(sends, 0);
+  const b = recentBroadcasts(d)[0];
+  assert.equal(b.kind, 'purge');
+  assert.equal(b.state, 'done');
+  assert.equal(b.sent, 18, 'revoked: 17 without consent + the unreadable one');
+  assert.equal(b.failed, 3, 'kept: the consented ones');
+  assert.deepEqual([...k.m.keys()].map((x) => x.slice(4, 6)).sort(), ['00', '00', '00']);
+  assert.equal(subscriberView(`sub:${'0'.repeat(62)}03`, k.m.get(`sub:${'0'.repeat(62)}03`)).consent, '1.0');
+});
+
+test('route: revoke-unconsented reaches the agenda with the typed count, behind BROADCAST_TOKEN', async () => {
+  const calls = [];
+  const agenda = { purgeStart: async (x) => { calls.push(x); return { ok: false, erro: 'confirm_mismatch' }; } };
+  const env = { BROADCAST_TOKEN: TOKEN };
+  const req = (h) => new Request('https://p.test/admin/subscribers/revoke-unconsented', { method: 'POST', headers: h, body: JSON.stringify({ confirm: 7, by: 'm' }) });
+  assert.equal((await tratarPedido(req({}), env, agenda)).status, 401);
+  const r = await tratarPedido(req({ Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' }), env, agenda);
+  assert.equal(r.status, 409);
+  assert.deepEqual(calls, [{ sentBy: 'm', confirm: 7 }]);
 });
