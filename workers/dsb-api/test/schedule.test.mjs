@@ -347,3 +347,12 @@ test('successful-run pushes: on until PUSH_RUN_OK_UNTIL, one per run, done and s
   await quiet.call('PATCH', `/jobs/${j.body.job.id}`, { status: 'ok' });
   assert.equal((await quiet.outbox()).filter((o) => o.kind === 'run_done').length, 0);
 });
+
+test('live: a log-only record left from before go-live does not hold X back', async () => {
+  const { env, call, fires } = setup({ SCHEDULE_MODE: 'live', START_URL_X_PUBLISH: 'https://h/x', START_KEY_X_PUBLISH: 'k' });
+  await call('PATCH', '/schedule/x_morning', { mode: 'on' }, { internal: true });
+  await env.DB.prepare(`INSERT INTO schedule_fires (slot, job, provider, round, run_date, run_key, status, fired_at) VALUES ('blog_morning','blog','claude','blog_morning','2026-11-25','2026-11-25-0830-blog_morning','logged', ?1)`).bind(new Date(at('2026-11-25T09:31:00')).toISOString()).run();
+  const f = fakeFetch({ status: 200 });
+  const r = await tick(env, at('2026-11-25T09:40:00'), f);
+  assert.equal((await fires()).find((x) => x.slot === 'x_morning').status, 'fired', JSON.stringify(r.done));
+});

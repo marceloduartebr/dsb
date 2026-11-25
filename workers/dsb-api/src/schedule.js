@@ -202,12 +202,13 @@ async function report(db, p) {
 // ---------------------------------------------------------------- the timer
 
 /** Open (blocking) fire of a job: claimed and not closed within RUN_LIMIT_MIN, or started and not yet claimed. */
-async function openFire(db, jobs, now) {
+async function openFire(db, jobs, now, live = false) {
   const rows = (await db
     .prepare(`SELECT * FROM schedule_fires WHERE job IN (${jobs.map((_, i) => `?${i + 1}`).join(',')}) AND status IN ('logged','fired','claimed') ORDER BY id DESC LIMIT 10`)
     .bind(...jobs)
     .all()).results || [];
-  return rows.find((f) => (f.status === 'claimed' ? minutesSince(f.claimed_at, now) < RUN_LIMIT_MIN : minutesSince(f.fired_at || f.created_at, now) < OPEN_FIRE_MIN)) || null;
+  // A log-only record started nothing: once the timer is live it blocks nothing (it may be left from before go-live).
+  return rows.find((f) => (f.status === 'claimed' ? minutesSince(f.claimed_at, now) < RUN_LIMIT_MIN : !(live && f.status === 'logged') && minutesSince(f.fired_at || f.created_at, now) < OPEN_FIRE_MIN)) || null;
 }
 
 /**
@@ -263,7 +264,7 @@ export async function tick(env, now = Date.now(), fetchFn = fetch) {
     }
     // Order: one run per job at a time; X Publish waits for any blog run.
     const blockers = s.job === 'x_publish' ? ['x_publish', 'x_takedowns', 'blog'] : s.job === 'x_takedowns' ? ['x_publish', 'x_takedowns'] : [s.job];
-    if (await openFire(db, blockers, now)) {
+    if (await openFire(db, blockers, now, scheduleMode(env) === 'live')) {
       done.push({ slot: s.slot, action: 'waiting' });
       continue;
     }
