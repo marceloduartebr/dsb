@@ -1,3 +1,4 @@
+import { linkAnswerPush } from './push.js';
 import { ApiError, nowIso, nz } from './http.js';
 import { normalizeUrl } from './rules.js';
 import { checkDedup } from './posts.js';
@@ -82,8 +83,10 @@ export async function finishRequest(db, id, body, session) {
   } else {
     throw new ApiError(422, 'invalid_value', 'status must be done or refused');
   }
-  return db
+  const out = await db
     .prepare(`UPDATE intake_requests SET status = ?2, post_id = ?3, reason = ?4, updated_at = ?5 WHERE id = ?1 RETURNING *`)
     .bind(id, status, nz(postId), nz(reason), nowIso())
     .first();
+  await linkAnswerPush(db, out);
+  return out;
 }

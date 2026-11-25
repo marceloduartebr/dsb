@@ -1,3 +1,4 @@
+import { nextAt } from './schedule.js';
 import { ApiError } from './http.js';
 
 /**
@@ -295,6 +296,27 @@ export function nextRuns(now = Date.now()) {
 }
 
 /**
+ * The next start of every round from the schedule (X-30): its time and days. A burst-only slot is placed as if on,
+ * so the card says why it is not running; an off slot is listed as off. Falls back to the fixed times without the
+ * schedule table.
+ */
+async function scheduledRuns(db, now) {
+  let slots;
+  try {
+    slots = ((await db.prepare('SELECT * FROM schedule_slots WHERE round IS NOT NULL').all()).results || []);
+  } catch {
+    return nextRuns(now);
+  }
+  if (!slots.length) return nextRuns(now);
+  const out = [];
+  for (const s of slots) {
+    const iso = nextAt({ ...s, mode: 'on' }, now, true);
+    if (iso) out.push({ round: s.round, at: Date.parse(iso), off: s.mode === 'off' });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+/**
  * GET /plan/upcoming → {rounds: [{round, at, items, held, stale, …}]}: the next run of every round, worked out in
  * time order. A post an earlier round takes is not offered again; a blog pick becomes a LinkedIn candidate for the
  * LinkedIn rounds after it (newest article last). Burst and stale ages are taken at each round's own time.
@@ -304,7 +326,11 @@ export async function planUpcoming(db, now = Date.now()) {
   let waiting = await approvedWaiting(db);
   let linkedin = await blogPublishedNoLinkedin(db);
   const rounds = [];
-  for (const { round, at } of nextRuns(now)) {
+  for (const { round, at, off } of await scheduledRuns(db, now)) {
+    if (off) {
+      rounds.push({ round, at: new Date(at).toISOString(), items: [], held: [], stale: [], inactive: 'Off in the schedule' });
+      continue;
+    }
     const r = pickRound(plan, round, { waiting, linkedin }, at);
     const taken = new Set(r.items.map((p) => p.id));
     if (LINKEDIN_ROUNDS.includes(round)) linkedin = linkedin.filter((p) => !taken.has(p.id));

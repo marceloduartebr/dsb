@@ -1,3 +1,4 @@
+import { newPostPush } from './push.js';
 import { ApiError, nowIso, nz, constraintError } from './http.js';
 import { validateNewPost, postKeys, normalizeUrl, validateCves, validateCover, validateRelatedUrls, validateStoryKey, storyRoot, isGenericUrl, EDITABLE, TRANSITIONS, STATUSES, TYPES } from './rules.js';
 
@@ -179,6 +180,7 @@ export async function createPost(db, body, session) {
     await db.prepare('DELETE FROM posts WHERE id = ?1').bind(post.id).run();
     throw constraintError(e) || e;
   }
+  await newPostPush(db, post);
   return { ...post, keys: fresh, keys_shared_with_follow_up: [...shared] };
 }
 

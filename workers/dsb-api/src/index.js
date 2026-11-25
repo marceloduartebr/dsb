@@ -8,6 +8,8 @@ import { metrics } from './metrics.js';
 import { startJob, finishJob } from './jobs.js';
 import { listCompetitors } from './competitors.js';
 import { getPlan, savePlan, planRound, planUpcoming, staleList, readPlan, publishNow } from './plan.js';
+import { listSchedule, saveSlot, runNow, claimRun, tick, linkJob, closeFireOfJob } from './schedule.js';
+import { flush, goingStalePush } from './push.js';
 
 /**
  * Routes (all require authentication except /health; see auth.js):
@@ -44,10 +46,16 @@ import { getPlan, savePlan, planRound, planUpcoming, staleList, readPlan, publis
  *  POST  /sweep                            runs the health checks
  *  POST  /jobs                             {job} → id
  *  PATCH /jobs/:id                         {status: ok|error|skipped, notes, items_read, items_written} (+ sweep)
+ *  GET   /schedule                         slots, last fires, change log, mode (log | live)
+ *  PATCH /schedule/:slot                   {time, days, mode} DSB Admin only
+ *  POST  /schedule/run                     {slot} DSB Admin only: Run now
+ *  POST  /schedule/claim                   {job, run_key?} the run's first call → {slot, round, run_key}; 409 = stop
+ *  POST  /schedule/tick                    one timer pass (STG has no cron; DSB Admin and Claude only)
+ *  POST  /jobs also takes run_key: the job run is linked to its fire and closes it.
  *
  * Every rejected write becomes an issue (source = api) and the response carries its id in "issue".
  */
-export async function handle(request, env) {
+export async function handle(request, env, ctx) {
   const url = new URL(request.url);
   const method = request.method;
   const parts = url.pathname.replace(/\/+$/, '').split('/').filter(Boolean);
@@ -66,7 +74,9 @@ export async function handle(request, env) {
   try {
     if (method === 'POST' || method === 'PATCH') body = await readBody(request);
     const id = parts[1] && /^\d+$/.test(parts[1]) ? Number(parts[1]) : null;
-    const result = await dispatch({ route, db, url, body, id, session });
+    const result = await dispatch({ route, db, url, body, id, session, env, parts });
+    // Pushes queued by this write (new issue, new post, link answer) go out now when due.
+    if (method !== 'GET' && ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(flush(env).catch(() => null));
     return json({ ok: true, ...result.body }, result.status || 200);
   } catch (e) {
     if (e instanceof ApiError) {
@@ -100,8 +110,9 @@ async function postOfRequest(db, parts, body) {
   return null;
 }
 
-async function dispatch({ route, db, url, body, id, session }) {
+async function dispatch({ route, db, url, body, id, session, env, parts }) {
   const q = url.searchParams;
+  if (route.startsWith('PATCH /schedule/') && parts.length === 2) return { body: await saveSlot(db, parts[1], body || {}, session) };
   switch (route) {
     case 'GET /dedup':
       return { body: await checkDedup(db, { sourceUrl: q.get('url'), cves: q.getAll('cve'), related: q.getAll('related'), storyKey: q.get('story_key') }) };
@@ -180,10 +191,24 @@ async function dispatch({ route, db, url, body, id, session }) {
       return { body: { marked: await markNotified(db, body.ids) } };
     case 'POST /sweep':
       return { body: { sweep: await sweep(db) } };
-    case 'POST /jobs':
-      return { body: { job: await startJob(db, body, session) }, status: 201 };
+    case 'POST /jobs': {
+      const job = await startJob(db, body, session);
+      await linkJob(db, body && body.run_key, job.id);
+      return { body: { job }, status: 201 };
+    }
+    case 'GET /schedule':
+      return { body: await listSchedule(db, env) };
+    case 'POST /schedule/run':
+      return { body: await runNow(env, db, body, session) };
+    case 'POST /schedule/claim':
+      return { body: await claimRun(db, body, session) };
+    case 'POST /schedule/tick': {
+      if (session.via !== 'internal' && session.agent !== 'claude') throw new ApiError(403, 'forbidden', 'Only DSB Admin or Claude runs the timer by hand');
+      return { body: await timerPass(env) };
+    }
     case 'PATCH /jobs/:id': {
       const job = await finishJob(db, id, body);
+      await closeFireOfJob(db, job);
       const s = await sweep(db).catch((e) => ({ error: String(e.message || e).slice(0, 200) }));
       return { body: { job, sweep: s } };
     }
@@ -192,8 +217,29 @@ async function dispatch({ route, db, url, body, id, session }) {
   }
 }
 
+/** One timer pass: start due slots, the daily going-stale push, then send due pushes. Never throws. */
+export async function timerPass(env, now = Date.now(), fetchFn = fetch) {
+  const out = {};
+  for (const [k, f] of [
+    ['schedule', () => tick(env, now, fetchFn)],
+    ['going_stale', () => goingStalePush(env.DB, now, { readPlan, staleList })],
+    ['push', () => flush(env, now)]
+  ]) {
+    try {
+      out[k] = await f();
+    } catch (e) {
+      out[k] = { error: String((e && e.message) || e).slice(0, 300) };
+    }
+  }
+  console.log(JSON.stringify({ event: 'timer', ...out }));
+  return out;
+}
+
 export default {
-  fetch(request, env) {
-    return handle(request, env);
+  fetch(request, env, ctx) {
+    return handle(request, env, ctx);
+  },
+  scheduled(controller, env, ctx) {
+    ctx.waitUntil(timerPass(env, controller.scheduledTime || Date.now()));
   }
 };

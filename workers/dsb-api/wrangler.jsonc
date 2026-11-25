@@ -26,6 +26,12 @@
     "logs": { "enabled": true, "head_sampling_rate": 1 },
     "traces": { "enabled": false, "head_sampling_rate": 0 }
   },
+  // X-30/X-31: the timer starts scheduled runs and sends pushes. Production has the account's 5th cron trigger;
+  // STG has none (account limit) and runs the timer through POST /schedule/tick. SCHEDULE_MODE log = record only.
+  // Secrets (from Pass at deploy): START_URL_<JOB>, START_KEY_<JOB>, ADMIN_PUSH_TOKEN.
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": { "DSB_ENV": "prod", "SCHEDULE_MODE": "log" },
+  "services": [{ "binding": "ADMIN", "service": "dsb-admin" }],
   "d1_databases": [
     {
       "binding": "DB",
@@ -42,6 +48,9 @@
       "routes": [
         { "pattern": "dsb-api-stg.duarte.top", "custom_domain": true }
       ],
+      "triggers": { "crons": [] },
+      "vars": { "DSB_ENV": "stg", "SCHEDULE_MODE": "log" },
+      "services": [{ "binding": "ADMIN", "service": "dsb-admin-stg" }],
       "d1_databases": [
         {
           "binding": "DB",

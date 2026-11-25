@@ -1,4 +1,5 @@
 import { ApiError, nowIso, nz } from './http.js';
+import { issuePush } from './push.js';
 
 const SEVERITIES = ['info', 'warning', 'error', 'critical'];
 const STAGES = ['curation', 'review', 'cover', 'approval', 'blog', 'linkedin', 'x', 'job', 'load', 'api'];
@@ -29,7 +30,7 @@ export async function record(db, p) {
     .bind(p.fingerprint)
     .first();
   if (ignored) return { id: ignored.id, status: 'ignored', ignored: true };
-  return db
+  const row = await db
     .prepare(UPSERT)
     .bind(
       String(p.fingerprint).slice(0, 300),
@@ -48,6 +49,8 @@ export async function record(db, p) {
       nowIso()
     )
     .first();
+  await issuePush(db, row, p);
+  return row;
 }
 
 /** A write rejected by the API becomes an issue (source = api). Never breaks the original response. */

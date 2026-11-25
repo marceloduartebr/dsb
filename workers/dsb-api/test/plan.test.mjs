@@ -105,7 +105,8 @@ test('burst: caps x factor, reserve 0, freshest first for burst types; it ends b
   for (let h = 10; h < 16; h++) list.push(await post('incident', `2026-11-19T${h}:00:00Z`));
   const n1 = await post('news', '2026-11-19T10:00:00Z');
   const plan = (await call('GET', '/plan')).body.plan;
-  plan.burst = { on: true, until: '2026-11-22T23:59:00-03:00', types: ['incident'], factor: 2, freshest_first: true };
+  const until = brtDateString(Date.now() + 7 * 86400000); // PATCH takes today … +14 days, by the real clock
+  plan.burst = { on: true, until, types: ['incident'], factor: 2, freshest_first: true };
   const saved = await call('PATCH', '/plan', { plan }, { internal: true });
   assert.equal(saved.status, 200, JSON.stringify(saved.body));
   let r = (await call('GET', `/plan/round?round=blog_morning&at=${NOW}`)).body;
@@ -116,7 +117,9 @@ test('burst: caps x factor, reserve 0, freshest first for burst types; it ends b
   assert.equal(r.effective.reserve.incident, 0);
   assert.equal(r.items.filter((p) => p.type === 'incident').length, 2);
   // after the end date the normal plan applies again
-  r = (await call('GET', '/plan/round?round=blog_morning&at=2026-11-23T11:00:00Z')).body;
+  r = (await call('GET', `/plan/round?round=blog_morning&at=${until}T11:00:00Z`)).body;
+  assert.equal(r.effective.burst_active, true, 'still on during its last day');
+  r = (await call('GET', `/plan/round?round=blog_morning&at=${new Date(Date.parse(until) + 86400000).toISOString().slice(0, 10)}T11:00:00Z`)).body;
   assert.equal(r.effective.burst_active, false);
   assert.equal(r.effective.caps.incident, 2);
 });
@@ -182,7 +185,7 @@ test('midday round: only during burst by default, always or off by setting; same
   assert.deepEqual(r.items, []);
   assert.match(r.inactive, /only during burst/);
   const plan = (await call('GET', '/plan')).body.plan;
-  plan.burst = { on: true, until: '2026-11-22', types: ['incident'], factor: 2, freshest_first: true };
+  plan.burst = { on: true, until: brtDateString(Date.now() + 7 * 86400000), types: ['incident'], factor: 2, freshest_first: true };
   assert.equal((await call('PATCH', '/plan', { plan }, { internal: true })).status, 200);
   r = (await call('GET', `/plan/round?round=blog_midday&at=${NOW}`)).body;
   assert.equal(r.effective.caps.incident, 2);
