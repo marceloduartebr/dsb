@@ -52,7 +52,9 @@ test('subscribers: total, a page without endpoints or keys, device and service i
   assert.equal(p.items.length, 30);
   assert.ok(p.cursor);
   const first = p.items[0];
-  assert.deepEqual(Object.keys(first).sort(), ['created', 'device', 'id', 'regions', 'service', 'types', 'updated']);
+  assert.deepEqual(Object.keys(first).sort(), ['created', 'device', 'id', 'mine', 'regions', 'service', 'types', 'updated']);
+  assert.equal(first.mine, false);
+  assert.deepEqual(p.mine.map((x) => [x.id, x.missing]), [['568add3d', 'ausente'], ['d48327b1', 'ausente']]);
   assert.equal(first.id, '00000000');
   assert.equal(first.device, 'iPhone · Safari');
   assert.equal(first.service, 'Apple');
@@ -60,7 +62,12 @@ test('subscribers: total, a page without endpoints or keys, device and service i
   assert.equal((await subscribersPage(k, p.cursor)).items.length, 5);
   assert.equal(deviceOf(''), 'Unknown');
   assert.equal(serviceOf('nope'), 'unknown');
-  assert.deepEqual(subscriberView('sub:abcdef1234', '{bad'), { id: 'abcdef12', unreadable: true });
+  assert.deepEqual(subscriberView('sub:abcdef1234', '{bad'), { id: 'abcdef12', mine: false, unreadable: true });
+  const k2 = kv(3);
+  k2.m.set(`sub:568add3d${'0'.repeat(56)}`, JSON.stringify({ endpoint: 'https://web.push.apple.com/me', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) Safari/604.1' }));
+  const p2 = await subscribersPage(k2, '');
+  assert.deepEqual(p2.mine.map((x) => [x.id, x.mine, x.device]), [['568add3d', true, 'iPhone · Safari'], ['d48327b1', true, undefined]]);
+  assert.equal(p2.items.find((x) => x.id === '568add3d').mine, true);
 });
 
 test('start: refused without PUSH_SEND, with a wrong count, or while another is sending', () => {
