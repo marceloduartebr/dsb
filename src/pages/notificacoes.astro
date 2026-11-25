@@ -3,6 +3,10 @@ import Base from '../layouts/Base.astro';
 // VAPID pública (repo ok). Privada só em ~/.config/dsb/vapid.json no box.
 const VAPID_PUBLICA = 'BBil-vzxxUdz652VnUs1k8vLSJ5RWaZNFNfcSxNv65u2AKBl41-zpcx2xICyJ1TMY2Pcpl7XcHN7kBuIyZdCiaQ';
 const siteUrl = 'https://dsb.duarte.top';
+// Termo de consentimento das notificações. Mudou a finalidade ou os dados guardados? Nova versão aqui
+// (e em TERMO_VERSAO no script e em worker/index.js), e o aceite é pedido de novo.
+const TERMO_VERSAO = '1.0';
+const TERMO_VIGENCIA = '25 de novembro de 2026';
 const TIPOS = [
   { id: 'noticia', label: 'Notícias' },
   { id: 'vulnerabilidades', label: 'Vulnerabilidades' },
@@ -58,6 +62,33 @@ const REGIOES = [
           </div>
         </fieldset>
         <p class="notif-dica">LATAM cobre Argentina, Chile, Peru, Paraguai, Uruguai, Colômbia, Bolívia, Equador, Venezuela, América Central, Cuba, República Dominicana e itens marcados como LATAM.</p>
+
+        <div class="notif-consent" id="notif-consent" data-versao={TERMO_VERSAO}>
+          <p class="notif-consent-aviso">
+            Ao tocar em «Receber avisos», você autoriza o DSB a enviar notificações a este aparelho quando sair um briefing dos tipos e regiões escolhidos.
+            Guardamos só o endereço técnico de entrega gerado pelo navegador, suas escolhas, a data e o modelo do navegador. Sem nome, e-mail ou telefone, e sem cookies.
+            Nada é ativado sem o seu toque e a permissão do navegador; dá para desativar quando quiser.
+          </p>
+          <details class="notif-termo" id="termo">
+            <summary>Termo de consentimento (versão {TERMO_VERSAO})</summary>
+            <div class="notif-termo-texto">
+              <p class="notif-termo-vig">Versão {TERMO_VERSAO} · vigente desde {TERMO_VIGENCIA}</p>
+              <p><strong>1. Quem trata os dados.</strong> O Data Security Briefing (dsb.duarte.top), mantido por Marcelo Duarte, é o controlador dos dados descritos aqui. Contato para qualquer pedido sobre seus dados: <a href="mailto:dsb@duarte.top">dsb@duarte.top</a>.</p>
+              <p><strong>2. Para que servem.</strong> Exclusivamente para enviar a este aparelho avisos de novos briefings dos tipos e regiões que você escolheu e, raramente, um aviso urgente a todos os inscritos sobre segurança de dados. Não usamos esses dados para publicidade, perfil de comportamento, venda ou qualquer outra finalidade.</p>
+              <p><strong>3. Quais dados.</strong> Ao ativar, guardamos no servidor do DSB (Cloudflare): o endereço de entrega da notificação e as chaves de criptografia gerados pelo seu navegador; os tipos e regiões escolhidos; a data da inscrição, da última alteração e do aceite deste termo, com a versão aceita; e o modelo do navegador e do sistema (user agent, até 160 caracteres), para diagnosticar falhas de entrega. As escolhas também ficam no armazenamento local do navegador, que só este site lê. Não coletamos nome, e-mail, telefone ou localização, e as notificações não usam cookies. O endereço IP é usado apenas no momento do pedido, para limitar abusos, e não é guardado.</p>
+              <p><strong>4. Base legal.</strong> O tratamento se apoia no seu consentimento (art. 7º, I, da Lei 13.709/2018, LGPD), dado de forma livre e expressa ao marcar a caixa abaixo, tocar em «Receber avisos» e permitir as notificações no navegador. Sem essas três ações nada é ativado.</p>
+              <p><strong>5. Com quem compartilhamos.</strong> Para entregar cada aviso, o endereço de entrega é usado pelo serviço de notificações do seu navegador (Apple, Google, Mozilla ou Microsoft, conforme o aparelho). Os dados ficam armazenados na Cloudflare, que hospeda o site. Esses fornecedores podem processar dados fora do Brasil, com as garantias previstas no art. 33 da LGPD. Não há outro compartilhamento.</p>
+              <p><strong>6. Por quanto tempo.</strong> Até você desativar. A inscrição também é apagada automaticamente quando o serviço de notificações informa que ela expirou ou deixou de existir (por exemplo, ao desinstalar o app ou limpar os dados do navegador).</p>
+              <p><strong>7. Como revogar.</strong> A qualquer momento, sem custo: nesta página, toque em «Parar de receber avisos» (a inscrição é apagada do servidor na hora); ou bloqueie as notificações do DSB nos ajustes do navegador ou do sistema. A revogação não afeta avisos já enviados.</p>
+              <p><strong>8. Seus direitos.</strong> Você pode pedir confirmação e acesso aos dados, correção, eliminação, informação sobre compartilhamento e revogação do consentimento (art. 18 da LGPD) pelo e-mail acima. Também pode reclamar à Autoridade Nacional de Proteção de Dados (ANPD).</p>
+              <p><strong>9. Mudanças neste termo.</strong> Se a finalidade ou os dados mudarem, publicaremos nova versão nesta página e pediremos novo consentimento antes de aplicar a mudança.</p>
+            </div>
+          </details>
+          <label class="notif-aceite">
+            <input type="checkbox" id="notif-aceite" />
+            <span>Li e concordo com o <a href="#termo" id="notif-ver-termo">termo de consentimento</a> das notificações</span>
+          </label>
+        </div>
       </div>
 
       <div class="notif-botoes">
@@ -82,6 +113,7 @@ const REGIOES = [
       <li><strong>Android:</strong> Chrome, mesmo sem instalar. Escolha tipo e região, toque em «Receber avisos» e depois em «Permitir».</li>
       <li><strong>iPhone:</strong> primeiro adicione o DSB à Tela de Início, abra pelo ícone e ative aqui.</li>
       <li><strong>Windows / Mac / Linux:</strong> Chrome ou Edge com o site (ou o app instalado).</li>
+      <li>Antes de ativar, leia e aceite o termo de consentimento acima.</li>
       <li>Para parar: «Parar de receber avisos» nesta página, ou bloqueie as notificações do DSB nos ajustes do sistema.</li>
     </ul>
   </article>
@@ -156,12 +188,43 @@ const REGIOES = [
     color: #0b0e13;
   }
   .notif-btn:disabled { opacity: 0.6; cursor: wait; }
+  .notif-consent {
+    margin: 1rem 0 0;
+    padding-top: 0.9rem;
+    border-top: 1px solid #2a3140;
+  }
+  .notif-consent-aviso { margin: 0 0 0.6rem; font-size: 0.92rem; color: #c3cad6; }
+  .notif-termo { margin: 0 0 0.7rem; font-size: 0.9rem; }
+  .notif-termo summary { cursor: pointer; color: #c9a227; font-weight: 600; }
+  .notif-termo-texto {
+    margin-top: 0.6rem;
+    max-height: 22rem;
+    overflow-y: auto;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid #2a3140;
+    border-radius: 10px;
+    background: #0f141b;
+    color: #c3cad6;
+  }
+  .notif-termo-texto p { margin: 0 0 0.6rem; }
+  .notif-termo-vig { color: #9aa3b2; font-size: 0.85rem; }
+  .notif-aceite {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    font-size: 0.95rem;
+    color: #eef1f6;
+    cursor: pointer;
+  }
+  .notif-aceite input { accent-color: #c9a227; margin-top: 0.2rem; }
+  .notif-aceite a { color: #c9a227; }
   .notif-ios { margin-top: 0.8rem; }
   .notif-ios ol { padding-left: 1.2rem; }
 </style>
 
 <script>
   const KEY = 'dsb-push-prefs';
+  const KEY_TERMO = 'dsb-push-termo';
   const TIPOS_ALL = ['noticia', 'vulnerabilidades', 'incidente'];
   const REGIOES_ALL = ['br', 'mx', 'latam', 'us', 'eu', 'global'];
 
@@ -173,6 +236,9 @@ const REGIOES = [
   const bDesativar = document.getElementById('notif-desativar');
   const ios = document.getElementById('notif-ios');
   const VAPID = caixa && caixa.dataset.vapid;
+  const consent = document.getElementById('notif-consent');
+  const aceite = document.getElementById('notif-aceite');
+  const TERMO_VERSAO = (consent && consent.dataset.versao) || '1.0';
 
   const ehIOS =
     /iphone|ipad|ipod/i.test(navigator.userAgent) ||
@@ -234,6 +300,18 @@ const REGIOES = [
       localStorage.setItem(KEY, JSON.stringify({ tipos, regioes }));
     } catch (_) {}
   }
+  function termoAceitoLocal() {
+    try {
+      return localStorage.getItem(KEY_TERMO) === TERMO_VERSAO;
+    } catch {
+      return false;
+    }
+  }
+  function salvarTermoLocal() {
+    try {
+      localStorage.setItem(KEY_TERMO, TERMO_VERSAO);
+    } catch (_) {}
+  }
   function prefsDaTela() {
     return { tipos: lerChecks('tipo'), regioes: lerChecks('regiao') };
   }
@@ -256,13 +334,16 @@ const REGIOES = [
     if (!tipos.length || !regioes.length) {
       throw new Error('prefs');
     }
+    if (!aceite || !aceite.checked) throw new Error('termo');
     await api('subscribe', {
       subscription: sub.toJSON(),
       topicos: ['edicao'],
       tipos,
       regioes,
+      termo: TERMO_VERSAO,
     });
     salvarPrefsLocal(tipos, regioes);
+    salvarTermoLocal();
   }
 
   async function iniciar() {
@@ -271,6 +352,13 @@ const REGIOES = [
     const p = carregarPrefs();
     aplicarChecks('tipo', p.tipos);
     aplicarChecks('regiao', p.regioes);
+    if (aceite) aceite.checked = termoAceitoLocal();
+    const verTermo = document.getElementById('notif-ver-termo');
+    const termo = document.getElementById('termo');
+    if (verTermo && termo)
+      verTermo.addEventListener('click', () => {
+        termo.open = true;
+      });
     if (ehIOS && !standalone) {
       estado.textContent = 'Para receber avisos no iPhone, instale o DSB antes.';
       ios.hidden = false;
@@ -293,10 +381,17 @@ const REGIOES = [
     mostra(!!sub && Notification.permission === 'granted');
   }
 
+  const MSG_TERMO = 'Para ativar, marque «Li e concordo» com o termo de consentimento.';
   bAtivar.addEventListener('click', async () => {
     const { tipos, regioes } = prefsDaTela();
     if (!tipos.length || !regioes.length) {
       estado.textContent = 'Marque ao menos um tipo e uma região.';
+      return;
+    }
+    // O pedido de permissão do navegador só aparece depois do aceite do termo.
+    if (!aceite || !aceite.checked) {
+      estado.textContent = MSG_TERMO;
+      if (aceite) aceite.focus();
       return;
     }
     bAtivar.disabled = true;
@@ -324,7 +419,9 @@ const REGIOES = [
       estado.textContent =
         e && e.message === 'prefs'
           ? 'Marque ao menos um tipo e uma região.'
-          : 'Não deu certo agora. Verifique a internet e tente de novo.';
+          : e && e.message === 'termo'
+            ? MSG_TERMO
+            : 'Não deu certo agora. Verifique a internet e tente de novo.';
     } finally {
       bAtivar.disabled = false;
     }
@@ -334,6 +431,11 @@ const REGIOES = [
     const { tipos, regioes } = prefsDaTela();
     if (!tipos.length || !regioes.length) {
       estado.textContent = 'Marque ao menos um tipo e uma região.';
+      return;
+    }
+    if (!aceite || !aceite.checked) {
+      estado.textContent = 'Para salvar, marque «Li e concordo» com o termo de consentimento.';
+      if (aceite) aceite.focus();
       return;
     }
     bSalvar.disabled = true;
@@ -364,6 +466,10 @@ const REGIOES = [
         await api('unsubscribe', { endpoint: sub.endpoint }).catch(() => null);
         await sub.unsubscribe();
       }
+      try {
+        localStorage.removeItem(KEY_TERMO);
+      } catch (_) {}
+      if (aceite) aceite.checked = false;
       mostra(false);
     } catch (e) {
       console.warn(e);

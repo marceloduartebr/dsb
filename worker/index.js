@@ -12,6 +12,9 @@ import {
   filtrarRegioes,
 } from './push/api-comum.js';
 
+// Versão vigente do termo de consentimento das notificações (src/pages/notificacoes.astro).
+const TERMO_VERSAO = '1.0';
+
 async function subscribe(request, env) {
   if (!origemOk(request)) return json({ ok: false, erro: 'origem' }, 403, request);
   let corpo;
@@ -33,6 +36,10 @@ async function subscribe(request, env) {
   ) {
     return json({ ok: false, erro: 'inscricao' }, 400, request);
   }
+  // Sem o aceite da versão vigente do termo nada é gravado (LGPD art. 7º, I, e art. 8º).
+  if (corpo.termo !== TERMO_VERSAO) {
+    return json({ ok: false, erro: 'termo' }, 400, request);
+  }
   const topicos = Array.isArray(corpo.topicos)
     ? corpo.topicos.filter((t) => t === 'edicao')
     : ['edicao'];
@@ -46,12 +53,16 @@ async function subscribe(request, env) {
   const regioes = temRegioes ? filtrarRegioes(corpo.regioes) : null;
 
   const kvKey = await chave(s.endpoint);
-  let criado = new Date().toISOString();
+  const agora = new Date().toISOString();
+  let criado = agora;
+  let aceitoEm = agora;
   try {
     const antigo = await env.DSB_PUSH.get(kvKey);
     if (antigo) {
       const prev = JSON.parse(antigo);
       if (prev && typeof prev.criado === 'string') criado = prev.criado;
+      // Mesmo termo já aceito antes: guarda a data do primeiro aceite.
+      if (prev && prev.termo === TERMO_VERSAO && typeof prev.aceito_em === 'string') aceitoEm = prev.aceito_em;
     }
   } catch {
     /* ignore */
@@ -62,7 +73,9 @@ async function subscribe(request, env) {
     keys: { p256dh, auth },
     topicos,
     criado,
-    atualizado: new Date().toISOString(),
+    atualizado: agora,
+    termo: TERMO_VERSAO,
+    aceito_em: aceitoEm,
     ua: (request.headers.get('User-Agent') || '').slice(0, 160),
   };
   if (tipos !== null) registro.tipos = tipos;
