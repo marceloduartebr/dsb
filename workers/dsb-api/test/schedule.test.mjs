@@ -48,11 +48,13 @@ test('schedule: seeded with today\'s times; Grok slots start off; Brasília cale
   assert.equal(r.status, 200);
   assert.equal(r.body.mode, 'log');
   const by = Object.fromEntries(r.body.slots.map((s) => [s.slot, s]));
-  assert.deepEqual(Object.keys(by).sort(), ['blog_afternoon', 'blog_midday', 'blog_morning', 'covers', 'curation', 'linkedin_afternoon', 'linkedin_morning', 'x_publish', 'x_radar', 'x_takedowns']);
+  assert.deepEqual(Object.keys(by).sort(), ['blog_afternoon', 'blog_midday', 'blog_morning', 'covers', 'curation', 'linkedin_afternoon', 'linkedin_morning', 'x_afternoon', 'x_morning', 'x_radar', 'x_takedowns']);
   assert.equal(by.blog_morning.time, '08:30');
   assert.equal(by.blog_midday.mode, 'burst');
-  assert.equal(by.x_publish.mode, 'off');
-  assert.equal(by.x_publish.next_at, null);
+  assert.equal(by.x_afternoon.mode, 'off');
+  assert.equal(by.x_afternoon.next_at, null);
+  assert.equal(by.x_morning.time, '09:30');
+  assert.equal(by.x_afternoon.round, 'x_afternoon');
   assert.deepEqual(brt(at('2026-11-25T08:31:00')), { date: '2026-11-25', minutes: 511, dow: 3, hhmm: '0831' });
   assert.equal(runKey('2026-11-25', '08:30', 'blog_morning'), '2026-11-25-0830-blog_morning');
   // next start skips days the slot does not run
@@ -111,21 +113,22 @@ test('claim with nothing started (Run now in claude.ai): a manual fire of the la
 
 test('Grok (live): webhook gets run_key + env and Bearer key; claim needs that exact run_key, once', async () => {
   const { env, call, fires } = setup({ SCHEDULE_MODE: 'live', DSB_ENV: 'prod', START_URL_X_PUBLISH: 'https://hooks.example/x-publish', START_KEY_X_PUBLISH: 'xkey-123' });
-  assert.equal((await call('PATCH', '/schedule/x_publish', { mode: 'on' }, { internal: true })).status, 200);
+  assert.equal((await call('PATCH', '/schedule/x_afternoon', { mode: 'on' }, { internal: true })).status, 200);
   const fetchFn = fakeFetch({ status: 202, body: { accepted: true } });
   await tick(env, at('2026-11-25T18:02:00'), fetchFn);
   const call0 = fetchFn.calls.find((c) => c.url === 'https://hooks.example/x-publish');
   assert.ok(call0, 'webhook called');
   assert.equal(call0.headers.Authorization, 'Bearer xkey-123');
-  assert.deepEqual(call0.body, { run_key: '2026-11-25-1800-x_publish', env: 'prod' });
-  const f = (await fires()).find((x) => x.slot === 'x_publish');
+  assert.deepEqual(call0.body, { run_key: '2026-11-25-1800-x_afternoon', env: 'prod' });
+  const f = (await fires()).find((x) => x.slot === 'x_afternoon');
   assert.equal(f.status, 'fired');
   const grok = { token: TOKENS.TOKEN_GROK };
   assert.equal((await call('POST', '/schedule/claim', { job: 'x_publish', run_key: 'made-up' }, grok)).body.error, 'no_slot');
   assert.equal((await call('POST', '/schedule/claim', { job: 'x_radar', run_key: f.run_key }, grok)).body.error, 'no_slot', 'job must match');
   const ok = await call('POST', '/schedule/claim', { job: 'x_publish', run_key: f.run_key }, grok);
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
-  assert.equal(ok.body.slot, 'x_publish');
+  assert.equal(ok.body.slot, 'x_afternoon');
+  assert.equal(ok.body.round, 'x_afternoon', 'the run asks /plan/round with this');
   const twice = await call('POST', '/schedule/claim', { job: 'x_publish', run_key: f.run_key }, grok);
   assert.equal(twice.status, 409, 'a repeated run_key is refused');
 });
@@ -171,18 +174,18 @@ test('429: kept for a retry after Retry-After; a retry that works marks the fire
 
 test('order: X Publish waits while a blog run is open; a run that never claims is reported after 20 min', async () => {
   const { env, call, fires, issues } = setup({ SCHEDULE_MODE: 'live', START_URL_X_PUBLISH: 'https://h/x', START_KEY_X_PUBLISH: 'k', START_URL_BLOG: 'https://h/b', START_KEY_BLOG: 'k' });
-  await call('PATCH', '/schedule/x_publish', { mode: 'on', time: '17:05' }, { internal: true });
+  await call('PATCH', '/schedule/x_afternoon', { mode: 'on', time: '17:05' }, { internal: true });
   const f = fakeFetch({ status: 200 });
   await tick(env, at('2026-11-25T17:01:00'), f);
   assert.equal((await fires()).find((x) => x.slot === 'blog_afternoon').status, 'fired');
   const r = await tick(env, at('2026-11-25T17:06:00'), f);
-  assert.ok(r.done.find((d) => d.slot === 'x_publish' && d.action === 'waiting'));
-  assert.equal((await fires()).find((x) => x.slot === 'x_publish'), undefined);
+  assert.ok(r.done.find((d) => d.slot === 'x_afternoon' && d.action === 'waiting'));
+  assert.equal((await fires()).find((x) => x.slot === 'x_afternoon'), undefined);
   // 25 min later the blog run never claimed: reported and released, so X Publish starts
   await tick(env, at('2026-11-25T17:26:00'), f);
   assert.equal((await fires()).find((x) => x.slot === 'blog_afternoon').status, 'error');
   assert.ok((await issues()).find((i) => i.kind === 'slot_not_started'));
-  assert.equal((await fires()).find((x) => x.slot === 'x_publish').status, 'fired');
+  assert.equal((await fires()).find((x) => x.slot === 'x_afternoon').status, 'fired');
 });
 
 test('PATCH /schedule/:slot: Admin only, validated, logged; blog midday mode sets the plan\'s midday runs', async () => {

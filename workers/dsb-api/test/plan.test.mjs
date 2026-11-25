@@ -249,10 +249,14 @@ test('upcoming: next run of every round in time order; a post taken earlier is n
     ['blog_midday', '2026-11-20T15:30:00.000Z'],
     ['blog_afternoon', '2026-11-20T20:00:00.000Z'],
     ['linkedin_afternoon', '2026-11-20T20:30:00.000Z'],
+    ['x_afternoon', '2026-11-20T21:00:00.000Z'],
     ['blog_morning', '2026-11-21T11:30:00.000Z'],
-    ['linkedin_morning', '2026-11-21T12:00:00.000Z']
+    ['linkedin_morning', '2026-11-21T12:00:00.000Z'],
+    ['x_morning', '2026-11-21T12:30:00.000Z']
   ]);
-  const [mid, aft, lAft, morn, lMorn] = u.rounds;
+  const [mid, aft, lAft, xAft, morn, lMorn, xMorn] = u.rounds;
+  assert.equal(xAft.inactive, 'Off in the schedule', 'X slots start off until the cutover');
+  assert.equal(xMorn.inactive, 'Off in the schedule');
   assert.ok(mid.inactive);
   assert.deepEqual(ids(aft.items), [inc[0]]);                       // reserve 2 keeps the rest waiting
   assert.deepEqual(ids(lAft.items), [b0, inc[0]]);                  // the 17:00 pick follows on LinkedIn
@@ -261,4 +265,39 @@ test('upcoming: next run of every round in time order; a post taken earlier is n
   assert.deepEqual(lMorn.held.map((h) => [h.id, h.reason]), [[n1, 'total']]);
   // the single-round answer the publish tasks use is unchanged
   assert.deepEqual(ids((await call('GET', '/plan/round?round=blog_morning&at=2026-11-21T11:30:00Z')).body.items), [inc[0], inc[1], v1, n1]);
+});
+
+test('X rounds: blog-published posts with no X row, oldest article first, up to the total; burst multiplies the total; upcoming chains them', async () => {
+  const { env, call, post } = setup();
+  const pub = async (id, ch, at) => {
+    const c = await call('POST', '/publications', { post_id: id, channel: ch, lang: 'pt' }, ch === 'x' ? {} : {});
+    await call('POST', `/publications/${c.body.publication.id}/result`, { status: 'published', url: `https://e.com/${ch}/${id}` });
+    if (at) await env.DB.prepare('UPDATE publications SET published_at = ?1 WHERE id = ?2').bind(at, c.body.publication.id).run();
+  };
+  const ids5 = [];
+  for (let i = 0; i < 5; i++) {
+    const id = await post('incident', `2026-11-19T1${i}:00:00Z`);
+    await pub(id, 'blog', `2026-11-20T0${i}:00:00Z`);
+    ids5.push(id);
+  }
+  await pub(ids5[1], 'x'); // already on X
+  let r = (await call('GET', `/plan/round?round=x_afternoon&at=${NOW}`)).body;
+  assert.deepEqual(ids(r.items), [ids5[0], ids5[2], ids5[3]], 'oldest article first, skipping the one on X');
+  assert.deepEqual(r.held.map((h) => [h.id, h.reason]), [[ids5[4], 'total']]);
+  // burst x2: 6 per X run
+  const plan = (await call('GET', '/plan')).body.plan;
+  assert.equal(plan.rounds.x_morning.total, 3, 'default total');
+  plan.burst = { on: true, until: brtDateString(Date.now() + 7 * 86400000), types: ['incident'], factor: 2 };
+  plan.rounds.x_morning.total = 2;
+  assert.equal((await call('PATCH', '/plan', { plan }, { internal: true })).status, 200);
+  r = (await call('GET', `/plan/round?round=x_morning&at=${NOW}`)).body;
+  assert.equal(r.effective.total, 4, 'total x factor');
+  assert.equal(r.items.length, 4);
+  // the X slots on: upcoming hands X its own list, and a blog pick joins it
+  await call('PATCH', '/schedule/x_afternoon', { mode: 'on' }, { internal: true });
+  const u = (await call('GET', `/plan/upcoming?at=${NOW}`)).body.rounds;
+  const xa = u.find((x) => x.round === 'x_afternoon');
+  assert.ok(!xa.inactive);
+  assert.ok(xa.items.length > 0);
+  assert.equal((await call('GET', '/plan/round?round=x_evening')).status, 422);
 });

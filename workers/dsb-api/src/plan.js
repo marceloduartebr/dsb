@@ -16,7 +16,12 @@ export const BLOG_ROUNDS = ['blog_morning', 'blog_midday', 'blog_afternoon'];
 export const MIDDAY_RUNS = ['burst', 'always', 'off'];
 const DEFAULT_MIDDAY = { caps: { incident: 1, vulnerability: 1, news: 0 }, reserve: { incident: 0, vulnerability: 0, news: 0 }, total: 2, runs: 'burst' };
 export const LINKEDIN_ROUNDS = ['linkedin_morning', 'linkedin_afternoon'];
-const ROUNDS = [...BLOG_ROUNDS, ...LINKEDIN_ROUNDS];
+/** X rounds (Grok): a total per run, like LinkedIn; while burst is on the total is multiplied by the burst factor. */
+export const X_ROUNDS = ['x_morning', 'x_afternoon'];
+const DEFAULT_X = { total: 3 };
+const ROUNDS = [...BLOG_ROUNDS, ...LINKEDIN_ROUNDS, ...X_ROUNDS];
+/** The channel a derived round publishes to (posts already on the blog); null for blog rounds. */
+const channelOf = (round) => (LINKEDIN_ROUNDS.includes(round) ? 'linkedin' : X_ROUNDS.includes(round) ? 'x' : null);
 const BRT_OFFSET_MS = -3 * 3600 * 1000;
 const MAX_BURST_DAYS = 14;
 
@@ -30,7 +35,7 @@ export function validatePlan(p, now = Date.now()) {
   if (!p || typeof p !== 'object') bad('plan must be an object');
   const out = { rounds: {}, burst: {}, stale_business_days: {} };
   for (const r of ROUNDS) {
-    const src = (p.rounds || {})[r] || (r === 'blog_midday' ? DEFAULT_MIDDAY : null);
+    const src = (p.rounds || {})[r] || (r === 'blog_midday' ? DEFAULT_MIDDAY : X_ROUNDS.includes(r) ? DEFAULT_X : null);
     if (!src) bad(`rounds.${r} is missing`);
     if (!intIn(src.total, 0, 10)) bad(`rounds.${r}.total must be a whole number from 0 to 10`);
     const round = { total: src.total };
@@ -93,6 +98,7 @@ export function brtDateString(ms) {
 function normalize(plan) {
   const p = { ...plan, rounds: { ...plan.rounds } };
   if (!p.rounds.blog_midday) p.rounds.blog_midday = structuredClone(DEFAULT_MIDDAY);
+  for (const r of X_ROUNDS) if (!p.rounds[r]) p.rounds[r] = structuredClone(DEFAULT_X);
   if (p.burst) p.burst = { ...p.burst, until: p.burst.until ? burstDay(p.burst.until) : null };
   return p;
 }
@@ -143,6 +149,8 @@ export function effective(plan, now = Date.now()) {
         const extra = b.types.reduce((s, t) => s + (e.caps[t] - r.caps[t]), 0);
         e.total = Math.min(r.total + extra, 10);
       }
+    } else if (active && X_ROUNDS.includes(name)) {
+      e.total = Math.min(r.total * b.factor, 10); // X follows the burst (Marcelo, 2026-11-25)
     }
     rounds[name] = e;
   }
@@ -198,39 +206,45 @@ export async function staleList(db, plan, now = Date.now()) {
  * Blog: high priority first (outside the type caps and the stale rule), then per type the first posts in queue
  * order (freshest event first for burst types when the plan says so), up to the cap and only while more than the
  * reserve stay waiting; a post without a cover is held and the next of its type is taken; the round total cuts last.
- * LinkedIn: the blog-published posts with no LinkedIn row, oldest article first, up to the round total.
+ * LinkedIn and X: the blog-published posts with no row on that channel, oldest article first, up to the round total
+ * (X: times the burst factor while burst is on).
  */
 export async function planRound(db, round, now = Date.now()) {
   if (!ROUNDS.includes(round)) throw new ApiError(422, 'invalid_round', `round must be one of ${ROUNDS.join(', ')}`);
   const { plan } = await readPlan(db);
-  if (LINKEDIN_ROUNDS.includes(round)) return pickRound(plan, round, { linkedin: await blogPublishedNoLinkedin(db) }, now);
+  const ch = channelOf(round);
+  if (ch) return pickRound(plan, round, { [ch]: await blogPublishedWithout(db, ch) }, now);
   return pickRound(plan, round, { waiting: await approvedWaiting(db) }, now);
 }
 
-async function blogPublishedNoLinkedin(db) {
+/** Posts whose PT article is on the blog and that have no row yet on the channel (linkedin | x), oldest first. */
+async function blogPublishedWithout(db, channel) {
   const r = await db
     .prepare(
       `SELECT p.id, p.topic, p.type, p.country, p.priority, p.added_at, b.url AS blog_url, b.published_at AS blog_published_at
        FROM posts p
        JOIN publications b ON b.post_id = p.id AND b.channel = 'blog' AND b.lang = 'pt' AND b.status = 'published'
-       WHERE NOT EXISTS (SELECT 1 FROM publications c WHERE c.post_id = p.id AND c.channel = 'linkedin')
+       WHERE NOT EXISTS (SELECT 1 FROM publications c WHERE c.post_id = p.id AND c.channel = ?1)
        ORDER BY b.published_at`
     )
+    .bind(channel)
     .all();
   return r.results || [];
 }
 
 /** One round against the given lists (no database access), as GET /plan/round answers it. */
-function pickRound(plan, round, { waiting = [], linkedin = [] }, now) {
+function pickRound(plan, round, { waiting = [], linkedin = [], x = [] }, now) {
   const eff = effective(plan, now);
   const rule = eff.rounds[round];
   const base = { round, effective: { burst_active: eff.burst_active, burst_until: eff.burst_until, ...rule } };
 
-  if (LINKEDIN_ROUNDS.includes(round)) {
+  const ch = channelOf(round);
+  if (ch) {
+    const list = ch === 'x' ? x : linkedin;
     return {
       ...base,
-      items: linkedin.slice(0, rule.total).map((p) => brief(p, { blog_url: p.blog_url || null, ...(p.why ? { why: p.why } : {}) })),
-      held: linkedin.slice(rule.total).map((p) => brief(p, { reason: 'total' })),
+      items: list.slice(0, rule.total).map((p) => brief(p, { blog_url: p.blog_url || null, ...(p.why ? { why: p.why } : {}) })),
+      held: list.slice(rule.total).map((p) => brief(p, { reason: 'total' })),
       stale: []
     };
   }
@@ -281,7 +295,7 @@ function pickRound(plan, round, { waiting = [], linkedin = [] }, now) {
 }
 
 /** Scheduled time of each round, Brasília (the scheduled tasks). */
-export const ROUND_TIMES = { blog_morning: '08:30', linkedin_morning: '09:00', blog_midday: '12:30', blog_afternoon: '17:00', linkedin_afternoon: '17:30' };
+export const ROUND_TIMES = { blog_morning: '08:30', linkedin_morning: '09:00', x_morning: '09:30', blog_midday: '12:30', blog_afternoon: '17:00', linkedin_afternoon: '17:30', x_afternoon: '18:00' };
 
 /** The next run of every round after `now`, in time order (one each). */
 export function nextRuns(now = Date.now()) {
@@ -324,18 +338,23 @@ async function scheduledRuns(db, now) {
 export async function planUpcoming(db, now = Date.now()) {
   const { plan } = await readPlan(db);
   let waiting = await approvedWaiting(db);
-  let linkedin = await blogPublishedNoLinkedin(db);
+  let linkedin = await blogPublishedWithout(db, 'linkedin');
+  let x = await blogPublishedWithout(db, 'x');
   const rounds = [];
   for (const { round, at, off } of await scheduledRuns(db, now)) {
     if (off) {
       rounds.push({ round, at: new Date(at).toISOString(), items: [], held: [], stale: [], inactive: 'Off in the schedule' });
       continue;
     }
-    const r = pickRound(plan, round, { waiting, linkedin }, at);
+    const r = pickRound(plan, round, { waiting, linkedin, x }, at);
     const taken = new Set(r.items.map((p) => p.id));
-    if (LINKEDIN_ROUNDS.includes(round)) linkedin = linkedin.filter((p) => !taken.has(p.id));
+    const ch = channelOf(round);
+    if (ch === 'linkedin') linkedin = linkedin.filter((p) => !taken.has(p.id));
+    else if (ch === 'x') x = x.filter((p) => !taken.has(p.id));
     else {
-      linkedin = [...linkedin, ...waiting.filter((p) => taken.has(p.id)).map((p) => ({ ...p, blog_url: null, why: `after ${round}` }))];
+      const picked = waiting.filter((p) => taken.has(p.id)).map((p) => ({ ...p, blog_url: null, why: `after ${round}` }));
+      linkedin = [...linkedin, ...picked];
+      x = [...x, ...picked];
       waiting = waiting.filter((p) => !taken.has(p.id));
     }
     rounds.push({ ...r, at: new Date(at).toISOString() });
