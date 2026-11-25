@@ -250,7 +250,7 @@ test('push events: error issue (first time only), new post, link answer to Marce
   const res = await flush(env, Date.now() + 11 * 60000);
   assert.equal(res.failed, 0);
   assert.ok(sent.find((m) => m.title === 'STG · 1 new to approve'));
-  assert.ok(sent.every((m) => m.token === env.ADMIN_PUSH_TOKEN && m.target === 'https://dsb-admin/interno/avisar'));
+  assert.ok(sent.every((m) => m.token === env.ADMIN_PUSH_TOKEN && m.target === 'https://dsb-admin/internal/push'));
   assert.equal((await outbox()).filter((o) => !o.sent_at && Date.parse(o.send_after) <= Date.now() + 11 * 60000).length, 0);
 });
 

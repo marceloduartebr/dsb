@@ -2,7 +2,7 @@ import { nowIso } from './http.js';
 
 /**
  * Push on events (X-31). Writes go to push_outbox first; flush() sends what is due through DSB Admin
- * (service binding ADMIN → POST /interno/avisar, header x-interno-token = ADMIN_PUSH_TOKEN), which pushes to every
+ * (service binding ADMIN → POST /internal/push, header x-interno-token = ADMIN_PUSH_TOKEN), which pushes to every
  * subscribed device. A failed send stays in the outbox and is retried on the next flush.
  *
  * Rules: one push per thing (dedup_key); new posts wait 10 min so a curation run gives one push; quiet hours
@@ -80,7 +80,7 @@ export async function flush(env, now = Date.now()) {
     let ok = false;
     let err = null;
     try {
-      const r = await env.ADMIN.fetch('https://dsb-admin/interno/avisar', {
+      const r = await env.ADMIN.fetch('https://dsb-admin/internal/push', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-interno-token': String(env.ADMIN_PUSH_TOKEN) },
         body: JSON.stringify(payload)
