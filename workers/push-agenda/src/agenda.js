@@ -62,9 +62,11 @@ export class AgendaPush extends DurableObject {
     return r;
   }
 
+  /** Envio or fanout turned off: drop the briefing tick's next pass only; a broadcast keeps its own wake-up. */
   async apagarAlarme() {
     try {
-      await this.ctx.storage.deleteAlarm();
+      await this.ctx.storage.delete('tickAt');
+      await this.schedule();
     } catch {
       /* sem alarme anterior */
     }
@@ -320,6 +322,8 @@ export class AgendaPush extends DurableObject {
         await this.broadcastStep();
       } catch {
         logEvento('broadcast', { resultado: 'erro' });
+        // Retry after the normal gap, not at once (the error is caught, so the platform's backoff never applies).
+        await this.ctx.storage.put('broadcastAt', Date.now() + PASS_GAP_MS);
       }
     }
     // The tick runs when its time came, or when the alarm predates this scheme (no due times stored).

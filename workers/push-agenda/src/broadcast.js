@@ -162,7 +162,7 @@ export async function broadcastPass(db, env, deps, now = new Date()) {
   const b = activeBroadcast(db);
   if (!b) return { continue: false };
   if (!pushSendOn(env)) {
-    db.exec(`UPDATE broadcasts SET state = 'stopped', note = 'PUSH_SEND turned off while sending', finished_at = ? WHERE id = ?`, [now.toISOString(), b.id]);
+    db.exec(`UPDATE broadcasts SET state = 'stopped', note = 'PUSH_SEND turned off while sending', finished_at = ? WHERE id = ? AND state = 'sending'`, [now.toISOString(), b.id]);
     return { continue: false };
   }
   const page = await deps.kv.list({ prefix: 'sub:', cursor: b.cursor || undefined, limit: BATCH });
@@ -195,9 +195,15 @@ export async function broadcastPass(db, env, deps, now = new Date()) {
     } else failed++;
   }
   const done = Boolean(page.list_complete) || !page.cursor;
+  // The sends above awaited the network, so a cancel may have landed meanwhile: count what went out, but only a
+  // row still 'sending' moves on (a cancelled or stopped row keeps its state and is never resumed).
   db.exec(
-    `UPDATE broadcasts SET sent = sent + ?, expired = expired + ?, failed = failed + ?, cursor = ?, state = ?, finished_at = ? WHERE id = ?`,
+    `UPDATE broadcasts SET sent = sent + ?, expired = expired + ?, failed = failed + ?, cursor = ?,
+       state = CASE WHEN state = 'sending' THEN ? ELSE state END,
+       finished_at = CASE WHEN state = 'sending' THEN ? ELSE finished_at END
+     WHERE id = ?`,
     [sent, expired, failed, done ? null : page.cursor, done ? 'done' : 'sending', done ? now.toISOString() : null, b.id]
   );
-  return { continue: !done };
+  const still = row(db, `SELECT state FROM broadcasts WHERE id = ?`, [b.id]);
+  return { continue: !done && Boolean(still) && still.state === 'sending' };
 }

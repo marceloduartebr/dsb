@@ -138,3 +138,24 @@ test('routes: own token only; validation; test goes through the allowlist path; 
   await tratarPedido(req('/admin/broadcast/cancel', { method: 'POST', headers: auth, body: JSON.stringify({ by: 'm' }) }), env, agenda);
   assert.deepEqual(calls.at(-1), ['cancel', 'm']);
 });
+
+test('a cancel that lands while a pass is sending is kept: the pass counts its sends but does not resume the row', async () => {
+  const d = db();
+  startBroadcast(d, ON, { payload: validateMessage({ title: 't', body: 'b' }).payload, confirm: 20, total: 20 });
+  let first = true;
+  const send = async () => {
+    if (first) {
+      first = false;
+      cancelBroadcast(d, { by: 'm' });
+    }
+    return { classe: 'ok' };
+  };
+  const r = await broadcastPass(d, ON, { kv: kv(20), send });
+  assert.equal(r.continue, false);
+  const b = recentBroadcasts(d)[0];
+  assert.equal(b.state, 'cancelled');
+  assert.equal(b.sent, 8);
+  assert.equal(activeBroadcast(d), null);
+  assert.equal(startBroadcast(d, ON, { payload: validateMessage({ title: 't', body: 'b' }).payload, confirm: 20, total: 20 }).ok, true);
+  assert.equal(d.exec(`SELECT COUNT(*) AS n FROM broadcasts WHERE state = 'sending'`)[0].n, 1);
+});
