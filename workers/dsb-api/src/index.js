@@ -9,7 +9,7 @@ import { startJob, finishJob } from './jobs.js';
 import { listCompetitors } from './competitors.js';
 import { getPlan, savePlan, planRound, planUpcoming, staleList, readPlan, publishNow } from './plan.js';
 import { listSchedule, saveSlot, runNow, claimRun, tick, linkJob, closeFireOfJob } from './schedule.js';
-import { flush, goingStalePush } from './push.js';
+import { flush, goingStalePush, getPushSettings, savePushSettings } from './push.js';
 
 /**
  * Routes (all require authentication except /health; see auth.js):
@@ -46,6 +46,8 @@ import { flush, goingStalePush } from './push.js';
  *  POST  /sweep                            runs the health checks
  *  POST  /jobs                             {job} → id
  *  PATCH /jobs/:id                         {status: ok|error|skipped, notes, items_read, items_written} (+ sweep)
+ *  GET   /push/settings                    push settings: per job all|success|failed|off, other events on|off
+ *  PATCH /push/settings                    {settings: {key: value}} DSB Admin only
  *  GET   /schedule                         slots, last fires, change log, mode (log | live)
  *  PATCH /schedule/:slot                   {time, days, mode} DSB Admin only
  *  POST  /schedule/run                     {slot} DSB Admin only: Run now
@@ -196,6 +198,10 @@ async function dispatch({ route, db, url, body, id, session, env, parts }) {
       await linkJob(db, body && body.run_key, job.id);
       return { body: { job }, status: 201 };
     }
+    case 'GET /push/settings':
+      return { body: await getPushSettings(db) };
+    case 'PATCH /push/settings':
+      return { body: await savePushSettings(db, body, session) };
     case 'GET /schedule':
       return { body: await listSchedule(db, env) };
     case 'POST /schedule/run':

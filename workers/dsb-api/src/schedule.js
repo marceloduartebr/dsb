@@ -1,7 +1,7 @@
 import { ApiError, nowIso } from './http.js';
 import { readPlan, effective } from './plan.js';
 import { record } from './issues.js';
-import { enqueue } from './push.js';
+import { enqueue, runPushAllowed } from './push.js';
 
 /**
  * Schedule run by dsb-api (X-30). The timer (cron every 5 min in production; on demand in STG) starts each slot's
@@ -178,6 +178,7 @@ async function launch(env, db, fire, now, fetchFn) {
     .first();
   if (!retry) {
     await report(db, {
+      job: fire.job,
       fingerprint: `schedule:fire_failed:${fire.job}`,
       kind: 'fire_failed',
       severity: 'error',
@@ -227,7 +228,7 @@ export async function tick(env, now = Date.now(), fetchFn = fetch) {
   for (const f of unclaimed) {
     if (minutesSince(f.fired_at, now) < NOT_STARTED_MIN) continue;
     await db.prepare(`UPDATE schedule_fires SET status = 'error', error = 'started, but the run never claimed its slot', finished_at = ?2 WHERE id = ?1`).bind(f.id, new Date(now).toISOString()).run();
-    await report(db, { fingerprint: `schedule:not_started:${f.run_key}`, kind: 'slot_not_started', severity: 'error', summary: `${labelOf(f)} was started but the run never claimed its slot`, detail: { session_url: f.session_url }, suggested_action: 'Open the session link in DSB Admin (Flow, Schedule) to see why, then use Run now.' });
+    await report(db, { job: f.job, fingerprint: `schedule:not_started:${f.run_key}`, kind: 'slot_not_started', severity: 'error', summary: `${labelOf(f)} was started but the run never claimed its slot`, detail: { session_url: f.session_url }, suggested_action: 'Open the session link in DSB Admin (Flow, Schedule) to see why, then use Run now.' });
     done.push({ slot: f.slot, action: 'not_started' });
   }
   // 2. Claimed and never closed.
@@ -235,7 +236,7 @@ export async function tick(env, now = Date.now(), fetchFn = fetch) {
   for (const f of overdue) {
     if (minutesSince(f.claimed_at, now) < RUN_LIMIT_MIN) continue;
     await db.prepare(`UPDATE schedule_fires SET status = 'error', error = 'the run did not close its job', finished_at = ?2 WHERE id = ?1`).bind(f.id, new Date(now).toISOString()).run();
-    await report(db, { fingerprint: `schedule:not_closed:${f.run_key}`, kind: 'run_not_closed', severity: 'warning', summary: `${labelOf(f)} claimed its slot but did not close its job within 3 h`, detail: { session_url: f.session_url }, suggested_action: 'Check the run session; the next slot of this job is no longer blocked.' });
+    await report(db, { job: f.job, fingerprint: `schedule:not_closed:${f.run_key}`, kind: 'run_not_closed', severity: 'warning', summary: `${labelOf(f)} claimed its slot but did not close its job within 3 h`, detail: { session_url: f.session_url }, suggested_action: 'Check the run session; the next slot of this job is no longer blocked.' });
     done.push({ slot: f.slot, action: 'not_closed' });
   }
   // 3. Retries.
@@ -257,7 +258,7 @@ export async function tick(env, now = Date.now(), fetchFn = fetch) {
       const f = await insertFire(db, s, now, { status: 'missed' });
       // Log-only mode: the timed tasks still run the rounds, so a late slot is recorded but not reported.
       if (f && scheduleMode(env) === 'live') {
-        await report(db, { fingerprint: `schedule:missed:${f.run_key}`, kind: 'slot_missed', severity: 'error', summary: `${s.label} ${s.time} did not start (found ${late} min late)`, suggested_action: 'Use Run now in DSB Admin (Flow, Schedule) if the round is still needed.' });
+        await report(db, { job: s.job, fingerprint: `schedule:missed:${f.run_key}`, kind: 'slot_missed', severity: 'error', summary: `${s.label} ${s.time} did not start (found ${late} min late)`, suggested_action: 'Use Run now in DSB Admin (Flow, Schedule) if the round is still needed.' });
       }
       if (f) done.push({ slot: s.slot, action: 'missed' });
       continue;
@@ -346,9 +347,8 @@ export async function linkJob(db, runKeyValue, jobRunId) {
 }
 
 /**
- * PATCH /jobs/:id: closes the fire linked to the job (done | error | skipped). While PUSH_RUN_OK_UNTIL (a Brasília
- * day, YYYY-MM-DD) has not passed, a run that ends done or skipped also pushes (the first days after the cutover;
- * failures push through their issue anyway).
+ * PATCH /jobs/:id: closes the fire linked to the job (done | error | skipped) and pushes the outcome as the job's
+ * push setting allows (Audit tab: all | success | failed | off).
  */
 export async function closeFireOfJob(db, job, env = {}, now = Date.now()) {
   if (!job) return;
@@ -357,15 +357,18 @@ export async function closeFireOfJob(db, job, env = {}, now = Date.now()) {
     .prepare(`UPDATE schedule_fires SET status = ?2, finished_at = ?3, error = CASE WHEN ?2 = 'error' THEN ?4 ELSE error END WHERE job_run_id = ?1 AND status = 'claimed' RETURNING *`)
     .bind(job.id, status, job.finished_at || nowIso(), job.notes || null)
     .first();
-  const until = String(env.PUSH_RUN_OK_UNTIL || '');
-  if (!fire || !['done', 'skipped'].includes(status) || !/^\d{4}-\d{2}-\d{2}$/.test(until) || brt(now).date > until) return;
-  const label = (await db.prepare('SELECT label, time FROM schedule_slots WHERE slot = ?1').bind(fire.slot).first()) || { label: fire.slot, time: '' };
-  const counts = job.items_written != null ? ` · ${job.items_written} written` : '';
+  if (!fire) return;
+  const outcome = status === 'error' ? 'failed' : 'success';
+  if (!(await runPushAllowed(db, fire.job, outcome))) return;
+  const slot = (await db.prepare('SELECT label, time FROM schedule_slots WHERE slot = ?1').bind(fire.slot).first()) || { label: fire.slot, time: '' };
+  const counts = job.items_written != null && outcome === 'success' ? ` · ${job.items_written} written` : '';
+  const word = status === 'done' ? 'done' : status === 'skipped' ? 'skipped' : 'failed';
   await enqueue(db, {
-    kind: 'run_done',
+    kind: outcome === 'failed' ? 'run_failed' : 'run_done',
     dedup_key: `run:${fire.run_key}`,
-    title: `${label.label}${fire.manual ? ' (Run now)' : ` ${label.time}`} ${status === 'done' ? 'done' : 'skipped'}`,
-    body: `${String(job.notes || '').slice(0, 160)}${counts}`.trim() || (status === 'done' ? 'Finished OK' : 'Nothing to do'),
-    url: '/flow#schedule'
+    severity: outcome === 'failed' ? 'error' : 'info',
+    title: `${slot.label}${fire.manual ? ' (Run now)' : ` ${slot.time}`} ${word}`,
+    body: `${String(job.notes || '').slice(0, 160)}${counts}`.trim() || (status === 'done' ? 'Finished OK' : status === 'skipped' ? 'Nothing to do' : 'Ended with an error'),
+    url: outcome === 'failed' ? '/audit' : '/flow#schedule'
   }, now);
 }

@@ -326,28 +326,6 @@ test('live mode: a slot over 60 min late is missed, reported and pushed', async 
   assert.ok((await outbox()).find((o) => o.kind === 'issue' && o.dedup_key === `issue:${miss.id}`));
 });
 
-test('successful-run pushes: on until PUSH_RUN_OK_UNTIL, one per run, done and skipped only', async () => {
-  const { env, call, outbox } = setup({ PUSH_RUN_OK_UNTIL: '2099-12-31' });
-  const run = async (job, status, notes) => {
-    const c = await call('POST', '/schedule/claim', { job });
-    const j = await call('POST', '/jobs', { job: `${job}-x`, run_key: c.body.run_key });
-    await call('PATCH', `/jobs/${j.body.job.id}`, { status, notes, items_written: 2 });
-    return c.body.run_key;
-  };
-  const k1 = await run('covers', 'ok', '2 covers made');
-  const done = (await outbox()).find((o) => o.dedup_key === `run:${k1}`);
-  assert.equal(done.title, 'Covers (Run now) done');
-  assert.equal(done.body, '2 covers made · 2 written');
-  await run('curation', 'error', 'search failed');
-  assert.equal((await outbox()).filter((o) => o.kind === 'run_done').length, 1, 'errors push through their issue, not here');
-  // after the last day: silent
-  const quiet = setup({ PUSH_RUN_OK_UNTIL: '2020-01-01' });
-  const c = await quiet.call('POST', '/schedule/claim', { job: 'covers' });
-  const j = await quiet.call('POST', '/jobs', { job: 'covers', run_key: c.body.run_key });
-  await quiet.call('PATCH', `/jobs/${j.body.job.id}`, { status: 'ok' });
-  assert.equal((await quiet.outbox()).filter((o) => o.kind === 'run_done').length, 0);
-});
-
 test('live: a log-only record left from before go-live does not hold X back', async () => {
   const { env, call, fires } = setup({ SCHEDULE_MODE: 'live', START_URL_X_PUBLISH: 'https://h/x', START_KEY_X_PUBLISH: 'k' });
   await call('PATCH', '/schedule/x_morning', { mode: 'on' }, { internal: true });
@@ -355,4 +333,53 @@ test('live: a log-only record left from before go-live does not hold X back', as
   const f = fakeFetch({ status: 200 });
   const r = await tick(env, at('2026-11-25T09:40:00'), f);
   assert.equal((await fires()).find((x) => x.slot === 'x_morning').status, 'fired', JSON.stringify(r.done));
+});
+
+test('push settings: Admin only; per job all/success/failed/off decides run pushes; events on/off; a failed run pushes once', async () => {
+  const { env, call, outbox } = setup();
+  const g = await call('GET', '/push/settings');
+  assert.equal(g.body.settings['run:blog'], 'all');
+  assert.equal(g.body.settings.new_posts, 'on');
+  assert.equal((await call('PATCH', '/push/settings', { settings: { 'run:blog': 'failed' } })).status, 403);
+  assert.equal((await call('PATCH', '/push/settings', { settings: { 'run:blog': 'sometimes' } }, { internal: true })).status, 422);
+  assert.equal((await call('PATCH', '/push/settings', { settings: { nope: 'on' } }, { internal: true })).status, 422);
+  const r = await call('PATCH', '/push/settings', { settings: { 'run:covers': 'failed', 'run:linkedin': 'failed', 'run:curation': 'success', 'run:blog': 'off', new_posts: 'off' } }, { internal: true });
+  assert.deepEqual(r.body.changed_keys.sort(), ['new_posts', 'run:blog', 'run:covers', 'run:curation', 'run:linkedin']);
+  assert.equal(r.body.changed.updated_by, 'marcelo@app');
+  const run = async (job, status, notes) => {
+    const c = await call('POST', '/schedule/claim', { job });
+    const j = await call('POST', '/jobs', { job: `${job}-x`, run_key: c.body.run_key });
+    await call('PATCH', `/jobs/${j.body.job.id}`, { status, notes, items_written: 2 });
+    return c.body.run_key;
+  };
+  const ok = await run('covers', 'ok', 'fine');                // failed only → no push
+  const bad = await run('linkedin', 'error', 'cover gate');    // failed → push, once (one manual start per job per minute)
+  const cur = await run('curation', 'ok', '2 posts added');    // success → push
+  await run('blog', 'error', 'build failed');                   // off → nothing
+  const ob = await outbox();
+  assert.equal(ob.find((o) => o.dedup_key === `run:${ok}`), undefined);
+  const f = ob.find((o) => o.dedup_key === `run:${bad}`);
+  assert.equal(f.kind, 'run_failed');
+  assert.equal(f.severity, 'error');
+  assert.equal(f.title, 'LinkedIn morning (Run now) failed');
+  assert.equal(f.body, 'cover gate');
+  assert.equal(ob.find((o) => o.dedup_key === `run:${cur}`).title, 'Covers (Run now) done'.replace('Covers', 'Curation'));
+  assert.equal(ob.filter((o) => o.kind === 'issue').length, 0, 'job_failed of a scheduled run is not pushed again as an issue');
+  // new posts off
+  await call('POST', '/posts', { topic: 't', type: 'incident', country: 'BR', source_name: 'S', source_url: 'https://e.com/np', slug: 'np', briefing_md: '# b', post_text: 't' });
+  assert.equal((await outbox()).filter((o) => o.kind === 'new_posts').length, 0);
+  // other problems: off silences them, critical still pushes
+  await call('PATCH', '/push/settings', { settings: { issues: 'off' } }, { internal: true });
+  await call('POST', '/issues', { fingerprint: 'e1', kind: 'k', severity: 'error', stage: 'blog', summary: 'x' });
+  await call('POST', '/issues', { fingerprint: 'c1', kind: 'k', severity: 'critical', stage: 'blog', summary: 'y' });
+  assert.deepEqual((await outbox()).filter((o) => o.kind === 'issue').map((o) => o.severity), ['critical']);
+});
+
+test('push settings: a scheduler failure follows its job (missed slot with the job off: recorded, not pushed)', async () => {
+  const { env, call, issues, outbox } = setup({ SCHEDULE_MODE: 'live' });
+  await call('PATCH', '/push/settings', { settings: { 'run:curation': 'success' } }, { internal: true });
+  await tick(env, at('2026-11-25T08:31:00'), fakeFetch({ status: 200 }));
+  assert.ok((await issues()).find((i) => i.kind === 'slot_missed'), 'still an issue in Audit');
+  assert.equal((await outbox()).filter((o) => o.kind === 'issue' && /Curation/.test(o.body)).length, 0, 'curation failures muted');
+  assert.ok((await outbox()).find((o) => o.kind === 'issue' && /covers/i.test(o.body)), 'covers still on all');
 });
