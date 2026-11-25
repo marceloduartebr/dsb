@@ -175,8 +175,9 @@ test('purge: deletes every subscription without the current consent, keeps the c
     k.m.set(key, JSON.stringify({ ...JSON.parse(k.m.get(key)), termo: '1.0', aceito_em: '2026-11-25T17:00:00Z' }));
   }
   k.m.set(`sub:${'f'.repeat(64)}`, '{bad');
-  assert.equal(startPurge(d, { confirm: 20, total: 21 }).erro, 'confirm_mismatch');
-  assert.equal(startPurge(d, { confirm: 21, total: 21, sentBy: 'm@x' }).ok, true);
+  k.m.set(`sub:568add3d${'0'.repeat(56)}`, JSON.stringify({ endpoint: 'https://web.push.apple.com/me' }));
+  assert.equal(startPurge(d, { confirm: 20, total: 22 }).erro, 'confirm_mismatch');
+  assert.equal(startPurge(d, { confirm: 22, total: 22, sentBy: 'm@x' }).ok, true);
   assert.equal(startBroadcast(d, ON, { payload: validateMessage({ title: 't', body: 'b' }).payload, confirm: 21, total: 21 }).erro, 'broadcast_running', 'one job at a time');
   let sends = 0;
   let r;
@@ -187,8 +188,8 @@ test('purge: deletes every subscription without the current consent, keeps the c
   assert.equal(b.kind, 'purge');
   assert.equal(b.state, 'done');
   assert.equal(b.sent, 18, 'revoked: 17 without consent + the unreadable one');
-  assert.equal(b.failed, 3, 'kept: the consented ones');
-  assert.deepEqual([...k.m.keys()].map((x) => x.slice(4, 6)).sort(), ['00', '00', '00']);
+  assert.equal(b.failed, 4, 'kept: the consented ones and your own device');
+  assert.deepEqual([...k.m.keys()].map((x) => x.slice(4, 6)).sort(), ['00', '00', '00', '56']);
   assert.equal(subscriberView(`sub:${'0'.repeat(62)}03`, k.m.get(`sub:${'0'.repeat(62)}03`)).consent, '1.0');
 });
 

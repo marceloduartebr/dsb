@@ -214,8 +214,9 @@ export async function broadcastPass(db, env, deps, now = new Date()) {
       rec = null;
     }
     if (purge) {
-      // Keep only subscriptions that accepted the current terms; everything else (unreadable included) goes.
-      if (rec && rec.termo === TERMS_VERSION) failed++;
+      // Keep subscriptions that accepted the current terms and Marcelo's own (the alert allowlist, shown N/A in
+      // Admin); everything else (unreadable included) goes.
+      if ((rec && rec.termo === TERMS_VERSION) || ALERTA_PREFIXOS.includes(k.name.slice(4, 12))) failed++;
       else {
         await deps.kv.delete(k.name);
         sent++;
