@@ -25,6 +25,8 @@ import {
   recentBroadcasts,
   startBroadcast,
   startPurge,
+  ownedPrefixes,
+  markOwned,
   subscribersPage,
 } from './broadcast.js';
 
@@ -270,7 +272,7 @@ export class AgendaPush extends DurableObject {
   // ---------------------------------------------------------------- broadcast (DSB Admin, Push tab)
 
   async subscribers(cursor) {
-    return subscribersPage(this.env.DSB_PUSH, cursor);
+    return subscribersPage(this.env.DSB_PUSH, cursor, 30, ownedPrefixes(this.db()));
   }
 
   async broadcastStatus() {
@@ -285,6 +287,12 @@ export class AgendaPush extends DurableObject {
       await this.ctx.storage.put('broadcastAt', Date.now());
       await this.schedule();
     }
+    return r;
+  }
+
+  async markMine({ id, mine, by }) {
+    const r = markOwned(this.db(), { id, mine, by });
+    logEvento('owned', { resultado: r.ok ? (mine ? 'marcado' : 'desmarcado') : r.erro });
     return r;
   }
 
