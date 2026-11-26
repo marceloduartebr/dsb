@@ -322,11 +322,13 @@ const REGIOES = [
     } catch (_) {}
   }
   // «Receber avisos» and «Salvar preferências» stay grayed out until the consent box is ticked.
+  // True while a subscribe or save request is in flight: the box can't re-enable the buttons meanwhile.
+  let ocupado = false;
   function syncAceite() {
     const ok = !!(aceite && aceite.checked);
     for (const b of [bAtivar, bSalvar]) {
       if (!b) continue;
-      b.disabled = !ok;
+      b.disabled = !ok || ocupado;
       if (ok) {
         b.removeAttribute('data-off');
         b.removeAttribute('title');
@@ -424,6 +426,7 @@ const REGIOES = [
       if (aceite) aceite.focus();
       return;
     }
+    ocupado = true;
     bAtivar.disabled = true;
     estado.textContent = 'Ativando…';
     try {
@@ -453,6 +456,7 @@ const REGIOES = [
             ? MSG_TERMO
             : 'Não deu certo agora. Verifique a internet e tente de novo.';
     } finally {
+      ocupado = false;
       syncAceite();
     }
   });
@@ -468,6 +472,7 @@ const REGIOES = [
       if (aceite) aceite.focus();
       return;
     }
+    ocupado = true;
     bSalvar.disabled = true;
     estado.textContent = 'Salvando…';
     try {
@@ -483,6 +488,7 @@ const REGIOES = [
       console.warn(e);
       estado.textContent = 'Não deu certo salvar agora. Tente de novo.';
     } finally {
+      ocupado = false;
       syncAceite();
     }
   });
