@@ -188,6 +188,15 @@ const REGIOES = [
     color: #0b0e13;
   }
   .notif-btn:disabled { opacity: 0.6; cursor: wait; }
+  /* Grayed out until the consent box is ticked. */
+  .notif-btn[data-off],
+  .notif-btn[data-off]:hover {
+    background: #2a3140;
+    border-color: #2a3140;
+    color: #8b93a3;
+    opacity: 1;
+    cursor: not-allowed;
+  }
   .notif-consent {
     margin: 1rem 0 0;
     padding-top: 0.9rem;
@@ -312,6 +321,21 @@ const REGIOES = [
       localStorage.setItem(KEY_TERMO, TERMO_VERSAO);
     } catch (_) {}
   }
+  // «Receber avisos» and «Salvar preferências» stay grayed out until the consent box is ticked.
+  function syncAceite() {
+    const ok = !!(aceite && aceite.checked);
+    for (const b of [bAtivar, bSalvar]) {
+      if (!b) continue;
+      b.disabled = !ok;
+      if (ok) {
+        b.removeAttribute('data-off');
+        b.removeAttribute('title');
+      } else {
+        b.setAttribute('data-off', '');
+        b.title = 'Marque «Li e concordo» com o termo para ativar';
+      }
+    }
+  }
   function prefsDaTela() {
     return { tipos: lerChecks('tipo'), regioes: lerChecks('regiao') };
   }
@@ -352,7 +376,11 @@ const REGIOES = [
     const p = carregarPrefs();
     aplicarChecks('tipo', p.tipos);
     aplicarChecks('regiao', p.regioes);
-    if (aceite) aceite.checked = termoAceitoLocal();
+    if (aceite) {
+      aceite.checked = termoAceitoLocal();
+      aceite.addEventListener('change', syncAceite);
+    }
+    syncAceite();
     const verTermo = document.getElementById('notif-ver-termo');
     const termo = document.getElementById('termo');
     if (verTermo && termo)
@@ -425,7 +453,7 @@ const REGIOES = [
             ? MSG_TERMO
             : 'Não deu certo agora. Verifique a internet e tente de novo.';
     } finally {
-      bAtivar.disabled = false;
+      syncAceite();
     }
   });
 
@@ -455,7 +483,7 @@ const REGIOES = [
       console.warn(e);
       estado.textContent = 'Não deu certo salvar agora. Tente de novo.';
     } finally {
-      bSalvar.disabled = false;
+      syncAceite();
     }
   });
 
@@ -472,6 +500,7 @@ const REGIOES = [
         localStorage.removeItem(KEY_TERMO);
       } catch (_) {}
       if (aceite) aceite.checked = false;
+      syncAceite();
       mostra(false);
     } catch (e) {
       console.warn(e);
