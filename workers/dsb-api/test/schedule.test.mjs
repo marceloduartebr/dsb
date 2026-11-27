@@ -445,3 +445,31 @@ test('self-starting slot (task on the MINIPC): the timer records the start witho
   assert.equal(r.status, 409);
   assert.equal(r.body.error, 'self_start');
 });
+
+test('X token (TOKEN_CLAUDE_X): only the X runs\' routes; acts as claude', async () => {
+  const XT = 'claudex-000000000000000000000000000';
+  const { env, call } = setup({ TOKEN_CLAUDE_X: XT });
+  const x = (m, p, b) => call(m, p, b, { token: XT });
+  // reads the radar and publish runs need
+  for (const p of ['/queue/x', '/queue/removals', '/competitors', '/dedup?url=https://e.com/a', '/issues?status=open', '/intake/requests', '/posts?limit=1']) {
+    assert.equal((await x('GET', p)).status, 200, p);
+  }
+  // X jobs only
+  const j = await x('POST', '/jobs', { job: 'x-publish' });
+  assert.equal(j.status, 201);
+  assert.equal(j.body.job.actor || 'claude', 'claude');
+  assert.equal((await x('PATCH', `/jobs/${j.body.job.id}`, { status: 'skipped', notes: 'test' })).status, 200);
+  assert.equal((await x('POST', '/jobs', { job: 'blog-publish' })).body.error, 'scope_x');
+  const other = await call('POST', '/jobs', { job: 'blog-publish' });
+  assert.equal((await x('PATCH', `/jobs/${other.body.job.id}`, { status: 'ok', notes: 'x' })).body.error, 'scope_x');
+  // claims: X jobs only
+  assert.equal((await x('POST', '/schedule/claim', { job: 'blog' })).body.error, 'scope_x');
+  // publications: X only
+  assert.equal((await x('POST', '/publications', { post_id: 1, channel: 'linkedin', lang: 'pt' })).body.error, 'scope_x');
+  // nothing else
+  for (const [m, p, b] of [['PATCH', '/plan', {}], ['POST', '/posts/1/status', { to: 'approved' }], ['GET', '/metrics'], ['PATCH', '/push/settings', {}], ['POST', '/schedule/tick']]) {
+    assert.equal((await x(m, p, b)).body.error, 'scope_x', `${m} ${p}`);
+  }
+  // the full Claude token is unaffected
+  assert.equal((await call('GET', '/metrics')).status, 200);
+});

@@ -17,13 +17,16 @@ const usable = (s) => typeof s === 'string' && s.length >= 24;
  * Who is calling:
  * - App service bindings: header x-internal-token = INTERNAL_TOKEN; actor = x-actor (Access e-mail or app name).
  * - Agents: Bearer TOKEN_GROK → grok; Bearer TOKEN_CLAUDE → claude.
+ * - Bearer TOKEN_CLAUDE_X → claude with scope 'x': only the X runs' routes (src/scope.js). It is the one stored on the
+ *   MINIPC, whose runs get no network secrets, so a leak there reaches X work only.
  * No secret configured: 503 (never open). Tokens in query strings or cookies are not accepted.
  */
 export async function authenticate(request, env) {
   const internal = env && env.INTERNAL_TOKEN;
   const grok = env && env.TOKEN_GROK;
   const claude = env && env.TOKEN_CLAUDE;
-  if (!usable(internal) && !usable(grok) && !usable(claude)) {
+  const claudeX = env && env.TOKEN_CLAUDE_X;
+  if (!usable(internal) && !usable(grok) && !usable(claude) && !usable(claudeX)) {
     return { ok: false, status: 503, error: 'not_configured' };
   }
 
@@ -37,6 +40,7 @@ export async function authenticate(request, env) {
   if (m) {
     if (usable(grok) && (await equal(m[1], grok))) return { ok: true, actor: 'grok', agent: 'grok', via: 'token' };
     if (usable(claude) && (await equal(m[1], claude))) return { ok: true, actor: 'claude', agent: 'claude', via: 'token' };
+    if (usable(claudeX) && (await equal(m[1], claudeX))) return { ok: true, actor: 'claude', agent: 'claude', via: 'token', scope: 'x' };
   }
   return { ok: false, status: 401, error: 'unauthorized' };
 }

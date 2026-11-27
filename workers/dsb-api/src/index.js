@@ -1,3 +1,4 @@
+import { checkScope } from './scope.js';
 import { ApiError, json, readBody } from './http.js';
 import { authenticate } from './auth.js';
 import { getPost, listPosts, checkDedup, createPost, addKeys, editPost, changeStatus, reorder, channelQueue } from './posts.js';
@@ -76,6 +77,7 @@ export async function handle(request, env, ctx) {
   try {
     if (method === 'POST' || method === 'PATCH') body = await readBody(request);
     const id = parts[1] && /^\d+$/.test(parts[1]) ? Number(parts[1]) : null;
+    await checkScope(session, { route, body, id, db });
     const result = await dispatch({ route, db, url, body, id, session, env, parts });
     // Pushes queued by this write (new issue, new post, link answer) go out now when due.
     if (method !== 'GET' && ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(flush(env).catch(() => null));
