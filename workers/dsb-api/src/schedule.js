@@ -162,6 +162,14 @@ async function launch(env, db, fire, now, fetchFn) {
   if (scheduleMode(env) !== 'live') {
     return db.prepare(`UPDATE schedule_fires SET status = 'logged', fired_at = ?2 WHERE id = ?1 RETURNING *`).bind(fire.id, new Date(now).toISOString()).first();
   }
+  // A slot whose task starts itself (on its own schedule, e.g. on the MINIPC): record the start, call nothing.
+  const slotRow = await db.prepare(`SELECT starts FROM schedule_slots WHERE slot = ?1`).bind(fire.slot).first();
+  if (slotRow && slotRow.starts === 'self') {
+    return db
+      .prepare(`UPDATE schedule_fires SET status = 'fired', fired_at = ?2, attempts = 1, http_status = NULL, error = NULL, next_try_at = NULL WHERE id = ?1 RETURNING *`)
+      .bind(fire.id, new Date(now).toISOString())
+      .first();
+  }
   const r = await startTask(env, fire, fetchFn);
   const attempts = (fire.attempts || 0) + 1;
   if (r.ok) {
@@ -252,7 +260,12 @@ export async function tick(env, now = Date.now(), fetchFn = fetch) {
     if (!s.days.includes(String(day.dow))) continue;
     const late = day.minutes - toMin(s.time);
     if (late < 0) continue;
-    const exists = await db.prepare(`SELECT id FROM schedule_fires WHERE slot = ?1 AND run_date = ?2 AND manual = 0`).bind(s.slot, day.date).first();
+    // A task that starts itself may claim before this tick (its claim then makes a manual fire): any fire of the
+    // slot since its time counts, so no second start is recorded and later reported as not started.
+    const exists =
+      s.starts === 'self'
+        ? await db.prepare(`SELECT id FROM schedule_fires WHERE slot = ?1 AND run_date = ?2 AND created_at >= ?3`).bind(s.slot, day.date, new Date(now - (late + 10) * 60000).toISOString()).first()
+        : await db.prepare(`SELECT id FROM schedule_fires WHERE slot = ?1 AND run_date = ?2 AND manual = 0`).bind(s.slot, day.date).first();
     if (exists) continue;
     if (late > LATE_LIMIT_MIN) {
       const f = await insertFire(db, s, now, { status: 'missed' });
@@ -284,6 +297,7 @@ export async function runNow(env, db, body, session, now = Date.now(), fetchFn =
   if (session.via !== 'internal') throw new ApiError(403, 'schedule_admin_only', 'Only DSB Admin uses Run now');
   const s = await db.prepare('SELECT * FROM schedule_slots WHERE slot = ?1').bind(String((body && body.slot) || '')).first();
   if (!s) throw new ApiError(404, 'not_found', 'Unknown slot');
+  if (s.starts === 'self') throw new ApiError(409, 'self_start', `${s.label} starts itself on its own computer: run its task there`);
   const blockers = s.job === 'x_publish' ? ['x_publish', 'x_takedowns'] : [s.job];
   const open = await openFire(db, blockers, now);
   if (open) throw new ApiError(409, 'job_running', `${open.slot} is still running (${open.run_key})`, { run_key: open.run_key });

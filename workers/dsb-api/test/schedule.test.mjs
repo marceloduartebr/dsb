@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { handle, timerPass } from '../src/index.js';
 import { createD1 } from './d1-sqlite.mjs';
-import { tick, nextAt, brt, runKey } from '../src/schedule.js';
+import { tick, nextAt, brt, runKey, claimRun } from '../src/schedule.js';
 import { sendAfter, compose, flush } from '../src/push.js';
 
 const TOKENS = { INTERNAL_TOKEN: 'internal-000000000000000000000000', TOKEN_GROK: 'grok-00000000000000000000000000000', TOKEN_CLAUDE: 'claude-0000000000000000000000000000' };
@@ -414,4 +414,34 @@ test('push settings: a scheduler failure follows its job (missed slot with the j
   assert.ok((await issues()).find((i) => i.kind === 'slot_missed'), 'still an issue in Audit');
   assert.equal((await outbox()).filter((o) => o.kind === 'issue' && /Curation/.test(o.body)).length, 0, 'curation failures muted');
   assert.ok((await outbox()).find((o) => o.kind === 'issue' && /covers/i.test(o.body)), 'covers still on all');
+});
+
+test('self-starting slot (task on the MINIPC): the timer records the start without calling; the run claims it; unclaimed = not started; Run now refused', async () => {
+  const { env, call, fires, issues } = setup({ SCHEDULE_MODE: 'live', DSB_ENV: 'prod' });
+  await env.DB.prepare(`UPDATE schedule_slots SET mode = 'off'`).run();
+  await env.DB.prepare(`UPDATE schedule_slots SET mode = 'on', provider = 'claude', starts = 'self' WHERE slot = 'x_radar'`).run();
+  const fetchFn = fakeFetch({ status: 200 });
+  const claim = (when) => claimRun(env.DB, { job: 'x_radar' }, { actor: 'claude', agent: 'claude' }, when);
+  // Day 1: the tick records the start, then the task claims it.
+  await tick(env, at('2026-11-25T12:01:00'), fetchFn);
+  assert.equal(fetchFn.calls.length, 0, 'nothing is called for a self-starting slot');
+  let f = (await fires()).filter((x) => x.slot === 'x_radar');
+  assert.deepEqual(f.map((x) => [x.status, x.http_status]), [['fired', null]]);
+  const c1 = await claim(at('2026-11-25T12:03:00'));
+  assert.equal(c1.run_key, '2026-11-25-1200-x_radar');
+  // Day 2: the task starts a little before the tick: its claim makes a manual start, and the tick adds none.
+  const c2 = await claim(at('2026-11-26T12:00:20'));
+  assert.equal(c2.manual, true);
+  await tick(env, at('2026-11-26T12:02:00'), fetchFn);
+  assert.equal((await fires()).filter((x) => x.slot === 'x_radar' && x.run_date === '2026-11-26').length, 1, 'no second start that would later be reported');
+  // Day 3: nobody claims (MINIPC asleep): after 20 min it is reported as not started.
+  await env.DB.prepare(`UPDATE schedule_fires SET status = 'done' WHERE status = 'claimed'`).run();
+  await tick(env, at('2026-11-27T12:01:00'), fetchFn);
+  await tick(env, at('2026-11-27T12:25:00'), fetchFn);
+  f = (await fires()).find((x) => x.slot === 'x_radar' && x.run_date === '2026-11-27');
+  assert.equal(f.status, 'error');
+  assert.ok((await issues()).some((i) => i.kind === 'slot_not_started'));
+  const r = await call('POST', '/schedule/run', { slot: 'x_radar' }, { internal: true });
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error, 'self_start');
 });
